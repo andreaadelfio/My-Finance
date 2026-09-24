@@ -8,10 +8,12 @@ Cosa legge da ogni file:
   - fogli "Uscite" ed "Entrate" (Data, Operazione, Dettagli, Categoria, Importo, Note)
     oppure, se mancano, il primo foglio con una riga di intestazione che contiene
     "Data" e "Importo" (es. estratto conto esportato dalla banca);
-  - "Dashboard Riassuntiva": budget mensile per categoria e saldo del conto a inizio anno.
+  - "Dashboard Riassuntiva": budget mensile per categoria e saldo del conto a inizio anno;
+  - "Investimenti Dashboard": registro delle operazioni sugli investimenti.
 
 Si può rilanciare sugli stessi file: i movimenti già presenti non vengono duplicati
-(stessa data, importo, operazione e dettagli), budget e saldo vengono aggiornati.
+(stessa data, importo, operazione e dettagli), così come le operazioni sugli
+investimenti già presenti; budget e saldo vengono aggiornati.
 URL e chiave vengono letti da assets/config.js.
 """
 import argparse
@@ -194,6 +196,36 @@ def read_dashboard(workbook):
     return budget, saldo
 
 
+def read_investimenti(workbook):
+    """Registro del foglio "Investimenti Dashboard" (intestazione ID | Data | Nome | ...)."""
+    if "Investimenti Dashboard" not in workbook.sheetnames:
+        return []
+    sheet = workbook["Investimenti Dashboard"]
+    righe, header_trovato = [], False
+    for row in sheet.iter_rows(max_col=18, values_only=True):
+        if not header_trovato:
+            header_trovato = text(row[0]) == "ID" and text(row[1]) == "Data" and text(row[2]) == "Nome"
+            continue
+        data, importo = to_date(row[1]), to_number(row[8])
+        if row[0] is None or not data or importo is None:
+            continue
+        righe.append({
+            "posizione": int(row[0]),
+            "data": data,
+            "nome": text(row[2]),
+            "isin": text(row[3]) if text(row[3]) not in ("", "-") else None,
+            "prodotto": text(row[4]) or None,
+            "tipo": text(row[5]) or None,
+            "operazione": text(row[6]),
+            "quantita": to_number(row[7]),
+            "importo": round(importo, 4),
+            "commissioni": to_number(row[9]),
+            "tassa": to_number(row[10]),
+            "note": text(row[17]) or None,
+        })
+    return righe
+
+
 def workbook_year(movimenti):
     years = Counter(m["data"][:4] for m in movimenti)
     return int(years.most_common(1)[0][0]) if years else None
@@ -205,6 +237,10 @@ def workbook_year(movimenti):
 
 def movimento_key(data, importo, operazione, dettagli):
     return (data, f"{float(importo):.2f}", operazione.strip().lower(), dettagli.strip().lower())
+
+
+def investimento_key(posizione, data, operazione, importo):
+    return (int(posizione), data, operazione, f"{float(importo):.2f}")
 
 
 def main():
@@ -220,11 +256,13 @@ def main():
         movimenti = read_movimenti(workbook)
         year = workbook_year(movimenti)
         budget, saldo = read_dashboard(workbook)
-        files.append((path, movimenti, year, budget, saldo))
+        investimenti = read_investimenti(workbook)
+        files.append((path, movimenti, year, budget, saldo, investimenti))
         entrate = sum(m["importo"] for m in movimenti if m["tipo"] == "entrata")
         uscite = -sum(m["importo"] for m in movimenti if m["tipo"] == "uscita")
         print(f"{path.name}: anno {year}, {len(movimenti)} movimenti "
-              f"(entrate {entrate:.2f}, uscite {uscite:.2f}), {len(budget)} budget, saldo iniziale {saldo}")
+              f"(entrate {entrate:.2f}, uscite {uscite:.2f}), {len(budget)} budget, saldo iniziale {saldo}, "
+              f"{len(investimenti)} operazioni sugli investimenti")
 
     if args.dry_run:
         return
@@ -237,7 +275,7 @@ def main():
     # Categorie: crea quelle mancanti
     categorie = {(c["tipo"], c["nome"]): c["id"] for c in db.select_all("categorie")}
     nuove = {(m["tipo"], m["categoria"]) for _, movimenti, *_ in files for m in movimenti if m["categoria"]}
-    nuove |= {("uscita", nome) for *_, budget, _ in files for nome in budget}
+    nuove |= {("uscita", nome) for _, _, _, budget, _, _ in files for nome in budget}
     nuove = [{"tipo": tipo, "nome": nome} for tipo, nome in sorted(nuove) if (tipo, nome) not in categorie]
     for categoria in db.insert("categorie", nuove):
         categorie[(categoria["tipo"], categoria["nome"])] = categoria["id"]
@@ -248,7 +286,11 @@ def main():
         movimento_key(r["data"], r["importo"], r["operazione"], r["dettagli"])
         for r in db.select_all("movimenti", "data,importo,operazione,dettagli")
     )
-    for path, movimenti, year, budget, saldo in files:
+    investimenti_presenti = Counter(
+        investimento_key(r["posizione"], r["data"], r["operazione"], r["importo"])
+        for r in db.select_all("investimenti", "posizione,data,operazione,importo")
+    )
+    for path, movimenti, year, budget, saldo, investimenti in files:
         da_inserire = []
         for m in movimenti:
             key = movimento_key(m["data"], m["importo"], m["operazione"], m["dettagli"])
@@ -272,8 +314,18 @@ def main():
         if saldo is not None and year:
             db.upsert("saldi", [{"anno": year, "saldo_iniziale": saldo}], "anno")
 
+        nuovi_investimenti = []
+        for riga in investimenti:
+            key = investimento_key(riga["posizione"], riga["data"], riga["operazione"], riga["importo"])
+            if investimenti_presenti[key] > 0:
+                investimenti_presenti[key] -= 1
+            else:
+                nuovi_investimenti.append(riga)
+        db.insert("investimenti", nuovi_investimenti)
+
         print(f"{path.name}: {len(da_inserire)} movimenti nuovi, "
-              f"{len(movimenti) - len(da_inserire)} già presenti, budget {year} aggiornati: {len(budget)}")
+              f"{len(movimenti) - len(da_inserire)} già presenti, budget {year} aggiornati: {len(budget)}, "
+              f"{len(nuovi_investimenti)} operazioni investimenti nuove")
 
 
 if __name__ == "__main__":

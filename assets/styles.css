@@ -225,6 +225,74 @@ input {
   text-align: right;
 }
 
+/* Grafici */
+
+.charts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.chart-box h2 {
+  margin-top: 0;
+  font-size: 0.95rem;
+}
+
+.chart-canvas {
+  position: relative;
+  height: 360px;
+}
+
+/* Investimenti */
+
+#i-nome {
+  flex: 2 1 200px;
+}
+
+#i-posizione {
+  width: 70px;
+}
+
+#i-isin,
+#i-prodotto,
+#i-tipo {
+  flex: 1 1 120px;
+}
+
+#i-quantita,
+#i-importo,
+#i-commissioni,
+#i-tassa {
+  width: 110px;
+  text-align: right;
+}
+
+#i-note {
+  flex: 1 1 160px;
+}
+
+.sintesi {
+  margin: 1rem 0 0;
+  color: var(--ink-soft);
+}
+
+.check-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-soft);
+}
+
+.summary-table tr.future td {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.summary-table tr.editing {
+  background: #e3efe6;
+}
+
 /* Tabelle */
 
 .table-wrap {
@@ -345,11 +413,21 @@ thead th {
   text-align: right;
 }
 
+@media (max-width: 900px) {
+  .charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Telefono: la tabella movimenti diventa una lista di schede */
 
 @media (max-width: 720px) {
   .page-shell {
     padding: 0.5rem;
+  }
+
+  .chart-canvas {
+    height: 460px;
   }
 
   .tabs {
@@ -361,7 +439,9 @@ thead th {
   }
 
   #f-operazione,
-  #f-note {
+  #f-note,
+  #i-nome,
+  #i-note {
     flex-basis: 100%;
   }
 

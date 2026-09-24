@@ -39,12 +39,32 @@ create table if not exists public.saldi (
   saldo_iniziale numeric(12, 2) not null
 );
 
+-- Registro investimenti (foglio "Investimenti Dashboard"): una riga per operazione.
+-- "posizione" è l'ID dell'Excel: raggruppa le operazioni dello stesso investimento.
+-- importo negativo per "Investimento", positivo per rimborsi, cedole e dividendi.
+create table if not exists public.investimenti (
+  id bigint generated always as identity primary key,
+  posizione integer not null,
+  data date not null,
+  nome text not null,
+  isin text,
+  prodotto text,
+  tipo text,
+  operazione text not null check (operazione in ('Investimento', 'Rimborso', 'Cedola', 'Dividendi')),
+  quantita numeric(14, 4),
+  importo numeric(14, 4) not null,
+  commissioni numeric(12, 4),
+  tassa numeric(12, 4),
+  note text,
+  created_at timestamptz not null default now()
+);
+
 -- Accesso libero con la chiave pubblica, come Listino Prezzi
 do $$
 declare
   t text;
 begin
-  foreach t in array array['categorie', 'movimenti', 'budget', 'saldi'] loop
+  foreach t in array array['categorie', 'movimenti', 'budget', 'saldi', 'investimenti'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "accesso pubblico" on public.%I', t);
     execute format(
@@ -55,3 +75,6 @@ begin
   end loop;
 end;
 $$;
+
+-- Fa vedere subito le nuove tabelle all'API di Supabase
+notify pgrst, 'reload schema';

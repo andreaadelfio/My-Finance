@@ -9,7 +9,10 @@ const state = {
   movimenti: [],
   budget: [],
   saldoIniziale: null,
+  investimenti: [],
   editingId: null,
+  editingInvestimentoId: null,
+  charts: {},
   feedbackTimeoutId: null
 };
 
@@ -20,6 +23,9 @@ const elements = {
   feedback: document.querySelector("#feedback"),
   viewMovimenti: document.querySelector("#view-movimenti"),
   viewRiepilogo: document.querySelector("#view-riepilogo"),
+  viewInvestimenti: document.querySelector("#view-investimenti"),
+  chartAndamento: document.querySelector("#chart-andamento"),
+  chartCategorie: document.querySelector("#chart-categorie"),
   form: document.querySelector("#movimento-form"),
   formData: document.querySelector("#f-data"),
   formTipo: document.querySelector("#f-tipo"),
@@ -39,7 +45,31 @@ const elements = {
   budgetHint: document.querySelector("#budget-hint"),
   andamentoTable: document.querySelector("#andamento-table"),
   usciteTable: document.querySelector("#uscite-table"),
-  entrateTable: document.querySelector("#entrate-table")
+  entrateTable: document.querySelector("#entrate-table"),
+  invForm: document.querySelector("#investimento-form"),
+  invData: document.querySelector("#i-data"),
+  invNome: document.querySelector("#i-nome"),
+  invPosizione: document.querySelector("#i-posizione"),
+  invIsin: document.querySelector("#i-isin"),
+  invProdotto: document.querySelector("#i-prodotto"),
+  invTipo: document.querySelector("#i-tipo"),
+  invOperazione: document.querySelector("#i-operazione"),
+  invQuantita: document.querySelector("#i-quantita"),
+  invImporto: document.querySelector("#i-importo"),
+  invCommissioni: document.querySelector("#i-commissioni"),
+  invTassa: document.querySelector("#i-tassa"),
+  invNote: document.querySelector("#i-note"),
+  invSubmit: document.querySelector("#i-submit"),
+  invCancel: document.querySelector("#i-cancel"),
+  invFuture: document.querySelector("#i-future"),
+  investimentiList: document.querySelector("#investimenti-list"),
+  tipiList: document.querySelector("#tipi-list"),
+  posizioniTable: document.querySelector("#posizioni-table"),
+  tipiTable: document.querySelector("#tipi-table"),
+  operazioniBody: document.querySelector("#operazioni-body"),
+  investimentiSintesi: document.querySelector("#investimenti-sintesi"),
+  chartTipi: document.querySelector("#chart-tipi"),
+  chartInvestimenti: document.querySelector("#chart-investimenti")
 };
 
 // ---------------------------------------------------------------------------
@@ -156,7 +186,7 @@ async function loadYears() {
 
 async function loadData() {
   const year = state.year;
-  const [categorie, movimenti, budget, saldi] = await Promise.all([
+  const [categorie, movimenti, budget, saldi, investimenti] = await Promise.all([
     fetchAll(() => state.supabase.from("categorie").select("*").order("id")),
     fetchAll(() => state.supabase
       .from("movimenti")
@@ -166,7 +196,8 @@ async function loadData() {
       .order("data", { ascending: false })
       .order("id", { ascending: false })),
     fetchAll(() => state.supabase.from("budget").select("*").lte("anno", year).order("id")),
-    state.supabase.from("saldi").select("*").eq("anno", year)
+    state.supabase.from("saldi").select("*").eq("anno", year),
+    fetchAll(() => state.supabase.from("investimenti").select("*").order("data").order("id"))
   ]);
   if (saldi.error) throw saldi.error;
 
@@ -174,6 +205,11 @@ async function loadData() {
   state.movimenti = movimenti.map((movimento) => ({ ...movimento, importo: Number(movimento.importo) }));
   state.budget = budget.map((riga) => ({ ...riga, importo_mensile: Number(riga.importo_mensile) }));
   state.saldoIniziale = saldi.data.length ? Number(saldi.data[0].saldo_iniziale) : null;
+  state.investimenti = investimenti.map((riga) => ({
+    ...riga,
+    importo: Number(riga.importo),
+    quantita: riga.quantita === null ? null : Number(riga.quantita)
+  }));
 }
 
 async function reload() {
@@ -477,6 +513,7 @@ function renderAndamento() {
         <td class="num" colspan="2">${state.saldoIniziale === null ? '<span class="zero">imposta il saldo iniziale</span>' : ""}</td>
       </tr>
     </tbody>`;
+  return { entrate, uscite, risparmio, saldi };
 }
 
 function renderCategoryTable(table, tipo) {
@@ -539,9 +576,111 @@ function renderRiepilogo() {
     ? `Budget mensili del ${anno} (non ci sono ancora budget per il ${state.year}: modificandone uno si copiano tutti nel ${state.year}).`
     : "Budget mensili: le celle rosse lo superano.";
   elements.saldoInput.value = state.saldoIniziale === null ? "" : String(state.saldoIniziale).replace(".", ",");
-  renderAndamento();
+  const andamento = renderAndamento();
   renderCategoryTable(elements.usciteTable, "uscita");
   renderCategoryTable(elements.entrateTable, "entrata");
+  renderCharts(andamento);
+}
+
+// ---------------------------------------------------------------------------
+// Grafici (Chart.js), come quelli della dashboard Excel
+// ---------------------------------------------------------------------------
+
+const CHART_COLORS = [
+  "#4472c4", "#ed7d31", "#a5a5a5", "#ffc000", "#5b9bd5", "#70ad47", "#264478", "#9e480e",
+  "#636363", "#997300", "#255e91", "#43682b", "#698ed0", "#f1975a", "#b7b7b7", "#ffcd33",
+  "#7cafdd", "#8cc168", "#335aa1", "#d26012", "#848484", "#cc9a00", "#3a7cb8", "#5a8a39"
+];
+
+// Scrive la percentuale sulle fette abbastanza grandi (come le etichette dell'Excel)
+const percentLabels = {
+  id: "percentLabels",
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart;
+    ctx.save();
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    chart.data.datasets.forEach((dataset, datasetIndex) => {
+      const total = dataset.data.reduce((sum, v) => sum + v, 0);
+      chart.getDatasetMeta(datasetIndex).data.forEach((arc, index) => {
+        const share = total ? dataset.data[index] / total : 0;
+        if (share < 0.04) return;
+        const { x, y } = arc.tooltipPosition();
+        ctx.fillText(`${Math.round(share * 100)}%`, x, y);
+      });
+    });
+    ctx.restore();
+  }
+};
+
+function drawChart(key, canvas, config) {
+  if (!window.Chart) return;
+  state.charts[key]?.destroy();
+  state.charts[key] = new window.Chart(canvas, config);
+}
+
+function renderCharts({ entrate, uscite, risparmio, saldi }) {
+  drawChart("andamento", elements.chartAndamento, {
+    type: "line",
+    data: {
+      labels: MESI.map((mese) => `${mese} ${state.year}`),
+      datasets: [
+        { label: "Totale Uscite", data: uscite, borderColor: "#4472c4", backgroundColor: "#4472c4" },
+        { label: "Totale Entrate", data: entrate, borderColor: "#ed7d31", backgroundColor: "#ed7d31" },
+        { label: "Risparmio", data: risparmio, borderColor: "#a5a5a5", backgroundColor: "#a5a5a5" },
+        { label: "Saldo", data: saldi, borderColor: "#ffc000", backgroundColor: "#ffc000" }
+      ]
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${formatEuro(item.raw)}` } }
+      },
+      scales: { y: { ticks: { callback: (value) => formatEuro(value) } } }
+    }
+  });
+
+  const righe = totalsByCategory("uscita");
+  const categorie = [...righe.entries()]
+    .map(([id, riga]) => ({
+      nome: id === "nessuna" ? "Senza categoria" : categoriaById(id)?.nome || "?",
+      spesa: round2(riga.mesi.reduce((sum, v) => sum + v, 0)),
+      operazioni: riga.operazioni
+    }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "it"));
+  const colori = categorie.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
+
+  drawChart("categorie", elements.chartCategorie, {
+    type: "doughnut",
+    data: {
+      labels: categorie.map((c) => c.nome),
+      datasets: [
+        { label: "N° operazioni", data: categorie.map((c) => c.operazioni), backgroundColor: colori },
+        { label: "Spesa", data: categorie.map((c) => Math.max(0, c.spesa)), backgroundColor: colori }
+      ]
+    },
+    options: {
+      maintainAspectRatio: false,
+      cutout: "35%",
+      plugins: {
+        legend: { position: window.innerWidth < 720 ? "bottom" : "right", labels: { boxWidth: 12, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: (item) => {
+              const total = item.dataset.data.reduce((sum, v) => sum + v, 0);
+              const value = item.dataset.label === "Spesa" ? formatEuro(item.raw) : `${item.raw} operazioni`;
+              return `${item.label}: ${value} (${Math.round((item.raw / total) * 100)}%)`;
+            }
+          }
+        }
+      }
+    },
+    plugins: [percentLabels]
+  });
 }
 
 async function saveBudget(input) {
@@ -584,6 +723,301 @@ async function saveSaldo() {
 }
 
 // ---------------------------------------------------------------------------
+// Investimenti (come il foglio "Investimenti Dashboard")
+// ---------------------------------------------------------------------------
+
+// YEARFRAC di Excel con base 30/360, usato per la durata delle posizioni
+function yearFrac(dataA, dataB) {
+  let [y1, m1, d1] = dataA.split("-").map(Number);
+  let [y2, m2, d2] = dataB.split("-").map(Number);
+  if (d1 === 31) d1 = 30;
+  if (d2 === 31 && d1 >= 30) d2 = 30;
+  return ((y2 - y1) * 360 + (m2 - m1) * 30 + (d2 - d1)) / 360;
+}
+
+function formatQuantity(value) {
+  return value === null ? "" : value.toLocaleString("it-IT", { maximumFractionDigits: 4 });
+}
+
+function investimentiVisibili() {
+  const oggi = todayISO();
+  return state.investimenti.filter((riga) => elements.invFuture.checked || riga.data <= oggi);
+}
+
+// Stesse formule del foglio: impegnato, rimborsi, interessi, risultato, rendimento
+function riepilogoPosizioni(righe) {
+  const posizioni = new Map();
+  for (const riga of righe) {
+    if (!posizioni.has(riga.posizione)) {
+      posizioni.set(riga.posizione, {
+        posizione: riga.posizione, nome: riga.nome, tipo: riga.tipo || "",
+        impegnato: 0, rimborsi: 0, interessi: 0, primaData: riga.data, ultimaData: riga.data
+      });
+    }
+    const p = posizioni.get(riga.posizione);
+    if (riga.operazione === "Investimento") p.impegnato += Math.abs(riga.importo);
+    if (riga.operazione === "Rimborso") p.rimborsi += riga.importo;
+    if (riga.operazione === "Cedola" || riga.operazione === "Dividendi") p.interessi += riga.importo;
+    if (riga.data < p.primaData) p.primaData = riga.data;
+    if (riga.data > p.ultimaData) p.ultimaData = riga.data;
+  }
+  return [...posizioni.values()]
+    .map((p) => {
+      const maturato = p.rimborsi + p.interessi;
+      const risultato = maturato - p.impegnato;
+      const rendimento = p.impegnato ? (risultato / p.impegnato) * 100 : 0;
+      const durata = yearFrac(p.primaData, p.ultimaData);
+      return { ...p, maturato, risultato, rendimento, durata, annuo: durata > 0 ? rendimento / durata : null };
+    })
+    .sort((a, b) => a.posizione - b.posizione);
+}
+
+function percent(value) {
+  return value === null ? "" : `${value.toLocaleString("it-IT", { maximumFractionDigits: 2 })}%`;
+}
+
+function renderInvestimenti() {
+  const righe = investimentiVisibili();
+  const posizioni = riepilogoPosizioni(righe);
+
+  elements.posizioniTable.innerHTML = !posizioni.length
+    ? '<tbody><tr><td class="empty">Nessun investimento.</td></tr></tbody>'
+    : `
+    <thead><tr>
+      <th>Nome</th><th class="num">ID</th><th>Tipo</th><th class="num">Capitale impegnato</th><th class="num">Rimborsi</th>
+      <th class="num">Interessi</th><th class="num">Capitale maturato</th><th class="num">Risultato</th>
+      <th class="num">Rend. %</th><th class="num">Durata (anni)</th><th class="num">Rend. % annuo</th>
+    </tr></thead>
+    <tbody>${posizioni.map((p) => `
+      <tr>
+        <th>${escapeHtml(p.nome)}</th>
+        <td class="num">${p.posizione}</td>
+        <td>${escapeHtml(p.tipo)}</td>
+        ${cell(p.impegnato)}${cell(p.rimborsi)}${cell(p.interessi)}${cell(p.maturato)}
+        ${cell(p.risultato, p.risultato < 0 ? "negative" : "positive")}
+        <td class="num ${p.rendimento < 0 ? "negative" : ""}">${percent(p.rendimento)}</td>
+        <td class="num">${p.durata.toLocaleString("it-IT", { maximumFractionDigits: 2 })}</td>
+        <td class="num">${percent(p.annuo)}</td>
+      </tr>`).join("")}</tbody>`;
+
+  const tipi = new Map();
+  for (const p of posizioni) {
+    const t = tipi.get(p.tipo) || { impegnato: 0, maturato: 0 };
+    t.impegnato += p.impegnato;
+    t.maturato += p.maturato;
+    tipi.set(p.tipo, t);
+  }
+  const totale = { impegnato: 0, maturato: 0 };
+  const tipoRow = (nome, t, tag = "td") => {
+    const risultato = t.maturato - t.impegnato;
+    return `<tr><th>${escapeHtml(nome || "—")}</th>${cell(t.impegnato)}${cell(t.maturato)}
+      ${cell(risultato, risultato < 0 ? "negative" : "positive")}
+      <${tag} class="num">${percent(t.impegnato ? (risultato / t.impegnato) * 100 : 0)}</${tag}></tr>`;
+  };
+  const tipiRows = [...tipi.entries()].sort(([a], [b]) => a.localeCompare(b, "it")).map(([nome, t]) => {
+    totale.impegnato += t.impegnato;
+    totale.maturato += t.maturato;
+    return tipoRow(nome, t);
+  }).join("");
+  elements.tipiTable.innerHTML = !tipi.size ? "" : `
+    <thead><tr><th>Tipo</th><th class="num">Capitale impegnato</th><th class="num">Capitale maturato</th><th class="num">Risultato</th><th class="num">Rend. %</th></tr></thead>
+    <tbody>${tipiRows}</tbody>
+    <tfoot>${tipoRow("Totale", totale)}</tfoot>`;
+
+  const oggi = todayISO();
+  elements.operazioniBody.innerHTML = [...righe].reverse().map((riga) => `
+    <tr class="${riga.data > oggi ? "future" : ""} ${riga.id === state.editingInvestimentoId ? "editing" : ""}" ${riga.data > oggi ? 'title="Operazione prevista"' : ""}>
+      <td>${formatDate(riga.data)}</td>
+      <td class="num">${riga.posizione}</td>
+      <td>${escapeHtml(riga.nome)}</td>
+      <td>${escapeHtml(riga.tipo || "")}</td>
+      <td>${escapeHtml(riga.operazione)}</td>
+      <td class="num">${formatQuantity(riga.quantita)}</td>
+      <td class="num ${riga.importo < 0 ? "negative" : "positive"}">${formatNumber(riga.importo)}</td>
+      <td>${escapeHtml(riga.note || "")}</td>
+      <td class="actions">
+        <button class="icon-button" type="button" data-action="inv-edit" data-id="${riga.id}" title="Modifica" aria-label="Modifica">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        </button>
+        <button class="icon-button danger" type="button" data-action="inv-delete" data-id="${riga.id}" title="Elimina" aria-label="Elimina">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+        </button>
+      </td>
+    </tr>`).join("") || '<tr><td colspan="9" class="empty">Nessuna operazione.</td></tr>';
+
+  renderInvestimentiCharts(righe, tipi);
+
+  const nomi = [...new Set(state.investimenti.map((r) => r.nome))].sort((a, b) => a.localeCompare(b, "it"));
+  elements.investimentiList.innerHTML = nomi.map((n) => `<option value="${escapeHtml(n)}"></option>`).join("");
+  const tipiNomi = [...new Set(state.investimenti.map((r) => r.tipo).filter(Boolean))].sort();
+  elements.tipiList.innerHTML = tipiNomi.map((t) => `<option value="${escapeHtml(t)}"></option>`).join("");
+}
+
+// Grafici come nel foglio: torta per tipo e andamento cumulato delle operazioni
+function renderInvestimentiCharts(righe, tipi) {
+  const oggi = todayISO();
+  let investito = 0;
+  let rimborsiCedole = 0;
+  const punti = [];
+  const sintesi = { investito: 0, restituito: 0, interessi: 0 };
+  for (const riga of [...righe].sort((a, b) => a.data.localeCompare(b.data))) {
+    if (riga.operazione === "Investimento") investito += riga.importo;
+    else rimborsiCedole += riga.importo;
+    punti.push({ data: riga.data, investito: round2(investito), rimborsiCedole: round2(rimborsiCedole) });
+    if (riga.data <= oggi) {
+      if (riga.operazione === "Investimento") sintesi.investito += -riga.importo;
+      else if (riga.operazione === "Rimborso") sintesi.restituito += riga.importo;
+      else sintesi.interessi += riga.importo;
+    }
+  }
+
+  elements.investimentiSintesi.innerHTML = `Ad oggi (${formatDate(oggi)}):
+    capitale investito <strong>${formatEuro(sintesi.investito)}</strong> ·
+    capitale restituito <strong>${formatEuro(sintesi.restituito)}</strong> ·
+    interessi e dividendi <strong class="positive">${formatEuro(sintesi.interessi)}</strong>`;
+
+  const tipiOrdinati = [...tipi.entries()].sort(([a], [b]) => a.localeCompare(b, "it"));
+  drawChart("tipi", elements.chartTipi, {
+    type: "pie",
+    data: {
+      labels: tipiOrdinati.map(([nome]) => nome || "—"),
+      datasets: [{
+        data: tipiOrdinati.map(([, t]) => round2(t.impegnato)),
+        backgroundColor: tipiOrdinati.map((_, i) => CHART_COLORS[i % CHART_COLORS.length])
+      }]
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "right" },
+        tooltip: {
+          callbacks: {
+            label: (item) => {
+              const total = item.dataset.data.reduce((sum, v) => sum + v, 0);
+              return `${item.label}: ${formatEuro(item.raw)} (${Math.round((item.raw / total) * 100)}%)`;
+            }
+          }
+        }
+      }
+    },
+    plugins: [percentLabels]
+  });
+
+  drawChart("investimenti", elements.chartInvestimenti, {
+    type: "line",
+    data: {
+      labels: punti.map((p) => formatDate(p.data)),
+      datasets: [
+        { label: "Capitale investito", data: punti.map((p) => p.investito), borderColor: "#4472c4", backgroundColor: "#4472c4" },
+        { label: "Rimborsi + cedole", data: punti.map((p) => p.rimborsiCedole), borderColor: "#ed7d31", backgroundColor: "#ed7d31" },
+        { label: "Capitale cumulato", data: punti.map((p) => round2(p.investito + p.rimborsiCedole)), borderColor: "#a5a5a5", backgroundColor: "#a5a5a5" }
+      ]
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      elements: { point: { radius: 0 }, line: { stepped: true } },
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${formatEuro(item.raw)}` } }
+      },
+      scales: {
+        x: { ticks: { maxTicksLimit: 14 } },
+        y: { ticks: { callback: (value) => formatEuro(value) } }
+      }
+    }
+  });
+}
+
+function resetInvestimentoForm() {
+  state.editingInvestimentoId = null;
+  elements.invForm.reset();
+  elements.invData.value = todayISO();
+  elements.invSubmit.textContent = "Aggiungi";
+  elements.invCancel.classList.add("hidden");
+}
+
+// Scegliendo un nome già usato, compila ID, ISIN, prodotto e tipo; un nome nuovo prende il prossimo ID
+function fillInvestimentoFromNome() {
+  if (state.editingInvestimentoId) return;
+  const nome = normalize(elements.invNome.value);
+  const precedenti = state.investimenti.filter((r) => normalize(r.nome) === nome);
+  const ultimo = precedenti[precedenti.length - 1];
+  if (ultimo) {
+    elements.invPosizione.value = ultimo.posizione;
+    elements.invIsin.value = ultimo.isin || "";
+    elements.invProdotto.value = ultimo.prodotto || "";
+    elements.invTipo.value = ultimo.tipo || "";
+  } else if (!elements.invPosizione.value) {
+    elements.invPosizione.value = Math.max(-1, ...state.investimenti.map((r) => r.posizione)) + 1;
+  }
+}
+
+function startEditInvestimento(id) {
+  const riga = state.investimenti.find((r) => r.id === id);
+  if (!riga) return;
+  state.editingInvestimentoId = id;
+  const numero = (v) => (v === null || v === undefined ? "" : String(Math.abs(v)).replace(".", ","));
+  elements.invData.value = riga.data;
+  elements.invNome.value = riga.nome;
+  elements.invPosizione.value = riga.posizione;
+  elements.invIsin.value = riga.isin || "";
+  elements.invProdotto.value = riga.prodotto || "";
+  elements.invTipo.value = riga.tipo || "";
+  elements.invOperazione.value = riga.operazione;
+  elements.invQuantita.value = numero(riga.quantita);
+  elements.invImporto.value = numero(riga.importo);
+  elements.invCommissioni.value = numero(riga.commissioni);
+  elements.invTassa.value = numero(riga.tassa);
+  elements.invNote.value = riga.note || "";
+  elements.invSubmit.textContent = "Salva";
+  elements.invCancel.classList.remove("hidden");
+  elements.invForm.scrollIntoView({ behavior: "smooth", block: "center" });
+  renderInvestimenti();
+}
+
+async function handleInvestimentoSubmit(event) {
+  event.preventDefault();
+  const importo = parseAmount(elements.invImporto.value);
+  if (importo === null || importo === 0) return showFeedback("Importo non valido.", "error");
+  const opzionale = (input) => (input.value.trim() ? parseAmount(input.value) : null);
+  const record = {
+    data: elements.invData.value,
+    posizione: Number(elements.invPosizione.value),
+    nome: elements.invNome.value.trim(),
+    isin: elements.invIsin.value.trim() || null,
+    prodotto: elements.invProdotto.value.trim() || null,
+    tipo: elements.invTipo.value.trim() || null,
+    operazione: elements.invOperazione.value,
+    quantita: opzionale(elements.invQuantita),
+    // Come nell'Excel: l'investimento è un'uscita (negativo), il resto positivo
+    importo: elements.invOperazione.value === "Investimento" ? -Math.abs(importo) : Math.abs(importo),
+    commissioni: opzionale(elements.invCommissioni),
+    tassa: opzionale(elements.invTassa),
+    note: elements.invNote.value.trim() || null
+  };
+  elements.invSubmit.disabled = true;
+  const { error } = state.editingInvestimentoId
+    ? await state.supabase.from("investimenti").update(record).eq("id", state.editingInvestimentoId)
+    : await state.supabase.from("investimenti").insert(record);
+  elements.invSubmit.disabled = false;
+  if (error) return showFeedback(`Salvataggio non riuscito: ${error.message}`, "error");
+  showFeedback(state.editingInvestimentoId ? "Operazione aggiornata." : "Operazione aggiunta.");
+  resetInvestimentoForm();
+  await reload();
+}
+
+async function deleteInvestimento(id) {
+  const riga = state.investimenti.find((r) => r.id === id);
+  if (!riga || !confirm(`Eliminare "${riga.operazione} ${riga.nome}" del ${formatDate(riga.data)}?`)) return;
+  const { error } = await state.supabase.from("investimenti").delete().eq("id", id);
+  if (error) return showFeedback(`Eliminazione non riuscita: ${error.message}`, "error");
+  if (state.editingInvestimentoId === id) resetInvestimentoForm();
+  showFeedback("Operazione eliminata.");
+  await reload();
+}
+
+// ---------------------------------------------------------------------------
 // Navigazione ed eventi
 // ---------------------------------------------------------------------------
 
@@ -591,6 +1025,10 @@ function showView(view) {
   elements.tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
   elements.viewMovimenti.classList.toggle("hidden", view !== "movimenti");
   elements.viewRiepilogo.classList.toggle("hidden", view !== "riepilogo");
+  elements.viewInvestimenti.classList.toggle("hidden", view !== "investimenti");
+  // I grafici disegnati mentre la sezione era nascosta vanno ridisegnati
+  if (view === "riepilogo") renderRiepilogo();
+  if (view === "investimenti") renderInvestimenti();
 }
 
 function renderAll() {
@@ -600,6 +1038,7 @@ function renderAll() {
   if (!state.editingId) renderFormCategories(elements.formCategoria.value);
   renderMovimenti();
   renderRiepilogo();
+  renderInvestimenti();
 }
 
 // Click su un importo del riepilogo: apre i movimenti filtrati
@@ -652,6 +1091,21 @@ function bindEvents() {
     if (event.target.matches(".budget-input")) saveBudget(event.target);
   });
   elements.saldoInput.addEventListener("change", saveSaldo);
+
+  elements.invForm.addEventListener("submit", handleInvestimentoSubmit);
+  elements.invCancel.addEventListener("click", () => {
+    resetInvestimentoForm();
+    renderInvestimenti();
+  });
+  elements.invNome.addEventListener("change", fillInvestimentoFromNome);
+  elements.invFuture.addEventListener("change", renderInvestimenti);
+  elements.operazioniBody.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    const id = Number(button.dataset.id);
+    if (button.dataset.action === "inv-edit") startEditInvestimento(id);
+    if (button.dataset.action === "inv-delete") deleteInvestimento(id);
+  });
 }
 
 async function init() {
@@ -664,6 +1118,7 @@ async function init() {
   }
   bindEvents();
   resetForm();
+  resetInvestimentoForm();
   await reload();
 }
 

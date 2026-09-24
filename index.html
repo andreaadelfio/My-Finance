@@ -17,8 +17,9 @@
         <h1>MyFinance</h1>
         <select id="year-select" aria-label="Anno"></select>
         <nav class="tabs">
-          <button class="tab active" type="button" data-view="movimenti">Movimenti</button>
-          <button class="tab" type="button" data-view="riepilogo">Riepilogo</button>
+          <button class="tab active" type="button" data-view="riepilogo">Riepilogo</button>
+          <button class="tab" type="button" data-view="movimenti">Movimenti</button>
+          <button class="tab" type="button" data-view="investimenti">Investimenti</button>
         </nav>
         <button id="refresh-button" class="icon-button" type="button" title="Ricarica" aria-label="Ricarica">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -30,7 +31,7 @@
       <div id="feedback" class="feedback hidden"></div>
 
       <!-- MOVIMENTI -->
-      <section id="view-movimenti" class="panel">
+      <section id="view-movimenti" class="panel hidden">
         <form id="movimento-form" class="entry-form">
           <input id="f-data" name="data" type="date" required aria-label="Data">
           <select id="f-tipo" name="tipo" aria-label="Tipo">
@@ -71,11 +72,22 @@
       </section>
 
       <!-- RIEPILOGO -->
-      <section id="view-riepilogo" class="panel hidden">
+      <section id="view-riepilogo" class="panel">
         <label class="saldo-field">
           Saldo del conto a inizio anno
           <input id="saldo-input" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off">
         </label>
+
+        <div class="charts">
+          <div class="chart-box">
+            <h2>Uscite, entrate, risparmio e saldo mensili</h2>
+            <div class="chart-canvas"><canvas id="chart-andamento"></canvas></div>
+          </div>
+          <div class="chart-box">
+            <h2>Categorie per spesa (interno) e per n° operazioni (esterno)</h2>
+            <div class="chart-canvas"><canvas id="chart-categorie"></canvas></div>
+          </div>
+        </div>
 
         <h2>Andamento mensile <span class="unit">(€)</span></h2>
         <div class="table-wrap">
@@ -93,8 +105,84 @@
           <table id="entrate-table" class="summary-table"></table>
         </div>
       </section>
+
+      <!-- INVESTIMENTI -->
+      <section id="view-investimenti" class="panel hidden">
+        <form id="investimento-form" class="entry-form">
+          <input id="i-data" type="date" required aria-label="Data">
+          <input id="i-nome" type="text" list="investimenti-list" placeholder="Nome (es. BTP...)" required autocomplete="off">
+          <datalist id="investimenti-list"></datalist>
+          <input id="i-posizione" type="number" min="0" step="1" placeholder="ID" title="ID posizione: stesso ID per le operazioni dello stesso investimento" required>
+          <input id="i-isin" type="text" placeholder="ISIN" autocomplete="off">
+          <input id="i-prodotto" type="text" placeholder="Prodotto" autocomplete="off">
+          <input id="i-tipo" type="text" list="tipi-list" placeholder="Tipo" autocomplete="off">
+          <datalist id="tipi-list"></datalist>
+          <select id="i-operazione" aria-label="Operazione">
+            <option>Investimento</option>
+            <option>Rimborso</option>
+            <option>Cedola</option>
+            <option>Dividendi</option>
+          </select>
+          <input id="i-quantita" type="text" inputmode="decimal" placeholder="Quantità" autocomplete="off">
+          <input id="i-importo" type="text" inputmode="decimal" placeholder="Importo €" required autocomplete="off">
+          <input id="i-commissioni" type="text" inputmode="decimal" placeholder="Commissioni" autocomplete="off">
+          <input id="i-tassa" type="text" inputmode="decimal" placeholder="Tassa" autocomplete="off">
+          <input id="i-note" type="text" placeholder="Note" autocomplete="off">
+          <button id="i-submit" class="primary-button" type="submit">Aggiungi</button>
+          <button id="i-cancel" class="secondary-button hidden" type="button">Annulla</button>
+        </form>
+
+        <label class="check-field">
+          <input id="i-future" type="checkbox" checked>
+          Includi le operazioni future previste (cedole e rimborsi già in calendario)
+        </label>
+
+        <p id="investimenti-sintesi" class="sintesi"></p>
+
+        <div class="charts investimenti-charts">
+          <div class="chart-box">
+            <h2>Capitale impegnato per tipo di prodotto</h2>
+            <div class="chart-canvas"><canvas id="chart-tipi"></canvas></div>
+          </div>
+          <div class="chart-box">
+            <h2>Andamento nel tempo</h2>
+            <div class="chart-canvas"><canvas id="chart-investimenti"></canvas></div>
+          </div>
+        </div>
+
+        <h2>Posizioni <span class="unit">(€)</span></h2>
+        <div class="table-wrap">
+          <table id="posizioni-table" class="summary-table"></table>
+        </div>
+
+        <h2>Per tipo <span class="unit">(€)</span></h2>
+        <div class="table-wrap">
+          <table id="tipi-table" class="summary-table"></table>
+        </div>
+
+        <h2>Operazioni</h2>
+        <div class="table-wrap">
+          <table class="summary-table">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th class="num">ID</th>
+                <th>Nome</th>
+                <th>Tipo</th>
+                <th>Operazione</th>
+                <th class="num">Quantità</th>
+                <th class="num">Importo</th>
+                <th>Note</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="operazioni-body"></tbody>
+          </table>
+        </div>
+      </section>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=1"></script>
     <script type="module" src="./assets/app.js?v=1"></script>
