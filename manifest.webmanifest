@@ -1,0 +1,18 @@
+{
+  "name": "MyFinance",
+  "short_name": "MyFinance",
+  "description": "Movimenti, budget e riepilogo delle finanze personali.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4efe7",
+  "theme_color": "#3f6d56",
+  "icons": [
+    {
+      "src": "./assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

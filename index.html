@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MyFinance</title>
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#3f6d56">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
+    <link rel="apple-touch-icon" href="./assets/icon.svg">
+    <link rel="stylesheet" href="./assets/styles.css?v=1">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="top-bar">
+        <h1>MyFinance</h1>
+        <select id="year-select" aria-label="Anno"></select>
+        <nav class="tabs">
+          <button class="tab active" type="button" data-view="movimenti">Movimenti</button>
+          <button class="tab" type="button" data-view="riepilogo">Riepilogo</button>
+        </nav>
+        <button id="refresh-button" class="icon-button" type="button" title="Ricarica" aria-label="Ricarica">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 12.65-5.65z"/>
+          </svg>
+        </button>
+      </header>
+
+      <div id="feedback" class="feedback hidden"></div>
+
+      <!-- MOVIMENTI -->
+      <section id="view-movimenti" class="panel">
+        <form id="movimento-form" class="entry-form">
+          <input id="f-data" name="data" type="date" required aria-label="Data">
+          <select id="f-tipo" name="tipo" aria-label="Tipo">
+            <option value="uscita">Uscita</option>
+            <option value="entrata">Entrata</option>
+          </select>
+          <input id="f-operazione" name="operazione" type="text" list="operazioni-list" placeholder="Operazione" required autocomplete="off">
+          <datalist id="operazioni-list"></datalist>
+          <select id="f-categoria" name="categoria" required aria-label="Categoria"></select>
+          <input id="f-importo" name="importo" type="text" inputmode="decimal" placeholder="Importo €" required autocomplete="off">
+          <input id="f-note" name="note" type="text" placeholder="Note" autocomplete="off">
+          <button id="f-submit" class="primary-button" type="submit">Aggiungi</button>
+          <button id="f-cancel" class="secondary-button hidden" type="button">Annulla</button>
+        </form>
+
+        <div class="filters">
+          <select id="filter-mese" aria-label="Mese"></select>
+          <select id="filter-categoria" aria-label="Categoria"></select>
+          <input id="filter-testo" type="search" placeholder="Cerca..." autocomplete="off">
+          <p id="totali" class="totali"></p>
+        </div>
+
+        <div class="table-wrap">
+          <table class="movimenti-table">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Operazione</th>
+                <th>Categoria</th>
+                <th class="num">Importo</th>
+                <th>Note</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="movimenti-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- RIEPILOGO -->
+      <section id="view-riepilogo" class="panel hidden">
+        <label class="saldo-field">
+          Saldo del conto a inizio anno
+          <input id="saldo-input" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off">
+        </label>
+
+        <h2>Andamento mensile <span class="unit">(€)</span></h2>
+        <div class="table-wrap">
+          <table id="andamento-table" class="summary-table"></table>
+        </div>
+
+        <h2>Uscite per categoria <span class="unit">(€)</span></h2>
+        <p class="hint"><span id="budget-hint"></span> Clicca un importo per vedere i movimenti.</p>
+        <div class="table-wrap">
+          <table id="uscite-table" class="summary-table"></table>
+        </div>
+
+        <h2>Entrate per categoria <span class="unit">(€)</span></h2>
+        <div class="table-wrap">
+          <table id="entrate-table" class="summary-table"></table>
+        </div>
+      </section>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
+    <script src="./assets/config.js?v=1"></script>
+    <script type="module" src="./assets/app.js?v=1"></script>
+  </body>
+</html>

@@ -1,0 +1,409 @@
+:root {
+  --bg: #f4efe7;
+  --surface: #fffaf4;
+  --ink: #1f2a24;
+  --ink-soft: #59655d;
+  --line: rgba(31, 42, 36, 0.12);
+  --accent: #3f6d56;
+  --accent-deep: #2c4f3d;
+  --positive: #2f7a3e;
+  --negative: #a23b2f;
+  --over: #f6d9d4;
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 14px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.page-shell {
+  width: min(100%, 1400px);
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+/* Barra in alto */
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.top-bar h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  color: var(--accent-deep);
+}
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.tab {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 0.4rem 1rem;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+select,
+input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.45rem 0.6rem;
+  min-width: 0;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: rgba(31, 42, 36, 0.08);
+}
+
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+  fill: var(--ink-soft);
+}
+
+.icon-button.danger svg {
+  fill: var(--negative);
+}
+
+.primary-button,
+.secondary-button {
+  border-radius: 8px;
+  padding: 0.45rem 1rem;
+  cursor: pointer;
+  border: 1px solid var(--accent);
+}
+
+.primary-button {
+  background: var(--accent);
+  color: #fff;
+}
+
+.primary-button:disabled {
+  opacity: 0.6;
+}
+
+.secondary-button {
+  background: transparent;
+  color: var(--accent-deep);
+}
+
+/* Messaggi */
+
+.feedback {
+  margin-bottom: 1rem;
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius);
+  background: #e3efe6;
+}
+
+.feedback-error {
+  background: var(--over);
+  color: var(--negative);
+}
+
+/* Pannelli */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+
+.panel h2 {
+  font-size: 1.05rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.unit {
+  font-weight: 400;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.hint {
+  margin: 0 0 0.5rem;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.entry-form,
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.entry-form {
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+#f-operazione {
+  flex: 2 1 200px;
+}
+
+#f-categoria {
+  flex: 1 1 180px;
+}
+
+#f-importo {
+  width: 110px;
+  text-align: right;
+}
+
+#f-note {
+  flex: 1 1 140px;
+}
+
+#filter-testo {
+  flex: 0 1 220px;
+}
+
+.totali {
+  margin: 0 0 0 auto;
+  color: var(--ink-soft);
+}
+
+.saldo-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.saldo-field input {
+  width: 140px;
+  text-align: right;
+}
+
+/* Tabelle */
+
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 0.75rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+thead th {
+  color: var(--ink-soft);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.positive {
+  color: var(--positive);
+}
+
+.negative {
+  color: var(--negative);
+}
+
+.empty {
+  text-align: center;
+  color: var(--ink-soft);
+  padding: 2rem;
+}
+
+.movimenti-table tbody tr:hover {
+  background: rgba(63, 109, 86, 0.06);
+}
+
+.movimenti-table tr.editing {
+  background: #e3efe6;
+}
+
+.operazione {
+  display: block;
+  font-weight: 600;
+}
+
+.dettagli {
+  display: block;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.actions {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.summary-table {
+  font-size: 13px;
+}
+
+.summary-table th,
+.summary-table td {
+  padding: 0.35rem 0.3rem;
+}
+
+.summary-table th:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+  white-space: nowrap;
+}
+
+.summary-table tfoot td,
+.summary-table tfoot th,
+.summary-table .strong-row,
+.summary-table .strong {
+  font-weight: 700;
+}
+
+.summary-table td.over {
+  background: var(--over);
+  color: var(--negative);
+}
+
+.summary-table .clickable {
+  cursor: pointer;
+}
+
+.summary-table .clickable:hover {
+  text-decoration: underline;
+}
+
+.zero {
+  color: #b5b9b3;
+}
+
+.budget-input {
+  width: 80px;
+  padding: 0.2rem 0.4rem;
+  text-align: right;
+}
+
+/* Telefono: la tabella movimenti diventa una lista di schede */
+
+@media (max-width: 720px) {
+  .page-shell {
+    padding: 0.5rem;
+  }
+
+  .tabs {
+    margin-left: 0;
+  }
+
+  .entry-form > * {
+    flex: 1 1 45%;
+  }
+
+  #f-operazione,
+  #f-note {
+    flex-basis: 100%;
+  }
+
+  .totali {
+    margin: 0;
+    width: 100%;
+  }
+
+  .movimenti-table thead {
+    display: none;
+  }
+
+  .movimenti-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "operazione operazione"
+      "data importo"
+      "categoria azioni"
+      "note note";
+    align-items: center;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .movimenti-table td {
+    border: 0;
+    padding: 0.1rem 0.25rem;
+  }
+
+  .movimenti-table td[data-label="Operazione"] { grid-area: operazione; }
+  .movimenti-table td[data-label="Data"] { grid-area: data; }
+  .movimenti-table td[data-label="Importo"] { grid-area: importo; font-weight: 600; }
+  .movimenti-table td[data-label="Categoria"] { grid-area: categoria; color: var(--ink-soft); }
+  .movimenti-table td.actions { grid-area: azioni; }
+  .movimenti-table td[data-label="Note"] { grid-area: note; color: var(--ink-soft); }
+
+  .movimenti-table td[data-label="Note"]:empty {
+    display: none;
+  }
+
+  .dettagli {
+    max-width: 85vw;
+  }
+}

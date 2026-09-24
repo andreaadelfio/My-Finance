@@ -1,0 +1,18 @@
+# Dati personali: non devono mai finire nel repository (che è pubblico)
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.ods
+backup*.json
+myfinance-backup*.json
+
+# Supabase CLI
+supabase/.temp/
+supabase/.branches/
+
+# Varie
+__pycache__/
+node_modules/
+.DS_Store
+*.codex
