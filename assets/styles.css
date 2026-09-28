@@ -420,6 +420,31 @@ thead th {
   background: rgba(63, 109, 86, 0.06);
 }
 
+/* Categoria della riga: chiusa ha lo stesso aspetto della tendina che si apre al clic */
+.categoria-button,
+.riga-categoria {
+  width: 100%;
+  max-width: 280px;
+  min-height: 30px;
+  padding: 0.2rem 1.6rem 0.2rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 10l5 5 5-5z' fill='%2359655d'/%3E%3C/svg%3E") no-repeat right 0.3rem center / 18px;
+  font-size: 0.9rem;
+  color: var(--ink);
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.categoria-button:hover,
+.categoria-button:focus-visible {
+  border-color: var(--accent);
+}
+
 .movimenti-table td.over {
   background: var(--over);
   color: var(--negative);

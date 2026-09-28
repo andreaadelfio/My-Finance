@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=1">
+    <link rel="stylesheet" href="./assets/styles.css?v=2">
   </head>
   <body>
     <div class="page-shell">
@@ -61,6 +61,7 @@
           <select id="filter-mese" aria-label="Mese"></select>
           <select id="filter-categoria" aria-label="Categoria"></select>
           <input id="filter-testo" type="search" placeholder="Cerca..." autocomplete="off">
+          <button id="filter-reset" class="secondary-button" type="button" title="Mostra tutti i movimenti">Svuota filtri</button>
           <p id="totali" class="totali"></p>
         </div>
 
@@ -205,7 +206,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
-    <script src="./assets/config.js?v=1"></script>
-    <script type="module" src="./assets/app.js?v=1"></script>
+    <script src="./assets/config.js?v=2"></script>
+    <script type="module" src="./assets/app.js?v=2"></script>
   </body>
 </html>

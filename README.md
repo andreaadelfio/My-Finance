@@ -19,7 +19,8 @@ Sostituisce il file Excel `Portafogli.xlsx` per movimenti, budget e riepilogo an
   totali vengono calcolati dal database su tutti i movimenti, non solo su quelli caricati.
   Aggiungi, modifica ed elimina entrate e uscite. L'importo si scrive positivo:
   il segno lo decide il tipo (Uscita/Entrata). Scrivendo un'operazione già vista,
-  la categoria viene proposta in automatico.
+  la categoria viene proposta in automatico. Cliccando la categoria di una riga si apre una
+  tendina per cambiarla al volo.
   La colonna **Budget** mostra il budget mensile della categoria nell'anno del movimento (se in
   quell'anno la categoria non era ancora nel budget, vale il primo budget successivo): rossa se
   il movimento da solo lo supera, gialla ("nessuno") se la categoria non ha budget. Il filtro
@@ -86,11 +87,22 @@ tutti gli anni. Vale per i movimenti nuovi (da qualunque parte arrivino) e, quan
 o cambi una voce della mappatura, anche per quelli già presenti. Le categorie della banca già
 mappate non compaiono più nelle tendine.
 
+Le categorie senza movimenti spariscono da sole: quando l'ultimo movimento di una categoria
+viene eliminato o spostato, il database la cancella con i suoi budget. Prima di svuotare una
+categoria della banca mappata, i suoi budget vengono copiati sulla categoria di destinazione
+(per gli anni in cui questa non ne ha). Restano le categorie usate come destinazione di una
+mappatura.
+
 Categorie da rinominare o eliminare: dal Table Editor di Supabase (tabella `categorie`).
 Nel Table Editor le tabelle `budget`, `movimenti` e `mappatura_categorie` hanno, accanto a
 `categoria_id`, la colonna `categoria` con il nome. Si può anche scrivere direttamente il nome
 (es. per aggiungere un budget): il database trova l'id, o dà errore se il nome non esiste.
 Rinominando una categoria il nome si aggiorna ovunque.
+Budget di un anno nuovo: al primo movimento dell'anno il database copia i budget dell'anno
+precedente, che poi si adeguano (Table Editor o Dashboard). Ogni categoria di uscita, anche
+nuova, ha la sua riga di `budget` nell'anno in corso (a 0 se non impostata), da compilare;
+fanno eccezione le categorie della banca già mappate su un'altra. Per il sito un budget a 0
+vale come "nessun budget" (giallo): per togliere il budget a una categoria mettilo a 0.
 
 ## Avvio locale
 

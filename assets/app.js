@@ -54,6 +54,7 @@ const elements = {
   filterMese: document.querySelector("#filter-mese"),
   filterCategoria: document.querySelector("#filter-categoria"),
   filterTesto: document.querySelector("#filter-testo"),
+  filterReset: document.querySelector("#filter-reset"),
   totali: document.querySelector("#totali"),
   movimentiBody: document.querySelector("#movimenti-body"),
   excelButton: document.querySelector("#excel-button"),
@@ -421,7 +422,9 @@ function renderMovimenti() {
         <span class="operazione">${escapeHtml(movimento.operazione)}</span>
         ${movimento.dettagli ? `<span class="dettagli" title="${escapeHtml(movimento.dettagli)}">${escapeHtml(movimento.dettagli)}</span>` : ""}
       </td>
-      <td data-label="Categoria">${escapeHtml(categoriaById(movimento.categoria_id)?.nome || "—")}</td>
+      <td data-label="Categoria">
+        <button class="categoria-button" type="button" data-action="categoria" data-id="${movimento.id}" title="Cambia categoria">${escapeHtml(categoriaById(movimento.categoria_id)?.nome || "—")}</button>
+      </td>
       <td data-label="Importo" class="num ${movimento.importo < 0 ? "negative" : "positive"}">${formatEuro(movimento.importo)}</td>
       ${cellaBudget(movimento)}
       <td data-label="Note">${escapeHtml(movimento.note || "")}</td>
@@ -438,6 +441,53 @@ function renderMovimenti() {
   elements.listaFine.textContent = !lista.righe.length ? ""
     : lista.finita ? `Fine: ${lista.righe.length} movimenti mostrati.` : "Caricamento di altri movimenti...";
   if (!lista.finita) watchListaFine();
+}
+
+// Cambio categoria direttamente dalla riga: il nome diventa una tendina (solo su quella riga)
+function apriSceltaCategoria(button, id) {
+  const movimento = state.lista.righe.find((m) => m.id === id);
+  if (!movimento) return;
+  const opzioni = categorieDelTipo(movimento.importo < 0 ? "uscita" : "entrata");
+  const corrente = categoriaById(movimento.categoria_id);
+  if (corrente && !opzioni.includes(corrente)) opzioni.unshift(corrente);
+  const select = document.createElement("select");
+  select.className = "riga-categoria";
+  select.setAttribute("aria-label", "Categoria");
+  select.innerHTML = '<option value="">— Senza categoria</option>' + opzioni
+    .map((c) => `<option value="${c.id}" ${c.id === movimento.categoria_id ? "selected" : ""}>${escapeHtml(c.nome)}</option>`)
+    .join("");
+  button.replaceWith(select);
+  select.focus();
+  try {
+    select.showPicker();
+  } catch {
+    // browser senza showPicker: la tendina si apre al clic
+  }
+  select.addEventListener("change", () => salvaCategoriaRiga(select, movimento));
+  select.addEventListener("blur", () => {
+    if (!select.disabled) renderMovimenti();
+  });
+}
+
+async function salvaCategoriaRiga(select, movimento) {
+  select.disabled = true;
+  const categoriaId = select.value ? Number(select.value) : null;
+  const { data, error } = await state.supabase
+    .from("movimenti")
+    .update({ categoria_id: categoriaId })
+    .eq("id", movimento.id)
+    .select()
+    .single();
+  if (error) {
+    showFeedback(`Categoria non salvata: ${error.message}`, "error");
+    renderMovimenti();
+    return;
+  }
+  state.lista.righe = state.lista.righe.map((m) => (m.id === movimento.id ? { ...m, ...data, importo: Number(data.importo) } : m));
+  renderMovimenti();
+  showFeedback(`Categoria di "${movimento.operazione}" aggiornata: ${categoriaById(data.categoria_id)?.nome || "senza categoria"}.`);
+  // Aggiorna in background totali della dashboard e categorie (una categoria rimasta vuota viene cancellata)
+  loadData().then(renderAll).catch((err) => console.error(err));
 }
 
 function onFiltriChange() {
@@ -931,17 +981,23 @@ function chiavePeriodo(riga, elenco) {
 }
 
 // Budget di una categoria per un anno: quello dell'anno o dell'ultimo anno precedente con budget
+// Un budget a 0 vale come "nessun budget" (le righe a 0 le crea il database per le nuove categorie)
+function budgetValidi() {
+  return state.budget.filter((riga) => riga.importo_mensile > 0);
+}
+
 function budgetYear(anno = state.year) {
-  const anni = state.budget.map((riga) => riga.anno).filter((a) => a <= anno);
+  const anni = budgetValidi().map((riga) => riga.anno).filter((a) => a <= anno);
   return anni.length ? Math.max(...anni) : null;
 }
 
 function budgetFor(categoriaId, anno = state.year) {
   const annoBudget = budgetYear(anno);
+  // Se l'anno ha una riga per la categoria vale quella (0 = nessun budget)
   const riga = state.budget.find((r) => r.categoria_id === categoriaId && r.anno === annoBudget);
-  if (riga) return riga.importo_mensile;
+  if (riga) return riga.importo_mensile > 0 ? riga.importo_mensile : null;
   // Anni in cui la categoria non era ancora nel budget: vale il primo budget successivo
-  const successivo = state.budget
+  const successivo = budgetValidi()
     .filter((r) => r.categoria_id === categoriaId && r.anno > anno)
     .sort((a, b) => a.anno - b.anno)[0];
   return successivo ? successivo.importo_mensile : null;
@@ -1693,6 +1749,13 @@ function bindEvents() {
   elements.filterMese.addEventListener("change", onFiltriChange);
   elements.filterCategoria.addEventListener("change", onFiltriChange);
   elements.filterTesto.addEventListener("input", onFiltriChange);
+  elements.filterReset.addEventListener("click", () => {
+    elements.filterAnno.value = "";
+    elements.filterMese.value = "";
+    elements.filterCategoria.value = "";
+    elements.filterTesto.value = "";
+    loadMovimentiPage(true);
+  });
 
   elements.movimentiBody.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
@@ -1700,6 +1763,7 @@ function bindEvents() {
     const id = Number(button.dataset.id);
     if (button.dataset.action === "edit") startEdit(id);
     if (button.dataset.action === "delete") deleteMovimento(id);
+    if (button.dataset.action === "categoria") apriSceltaCategoria(button, id);
   });
 
   elements.viewDashboard.addEventListener("click", (event) => {

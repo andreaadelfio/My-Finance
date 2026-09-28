@@ -108,12 +108,21 @@ create trigger movimenti_2_mappatura
 before insert or update of categoria_id, categoria on public.movimenti
 for each row execute function public.applica_mappatura_movimento();
 
--- Quando si aggiunge o cambia una mappatura, rimappa anche i movimenti già presenti
+-- Quando si aggiunge o cambia una mappatura, rimappa anche i movimenti già presenti.
+-- Prima copia i budget della categoria della banca sulla categoria mappata (per gli anni
+-- in cui questa non ne ha), perché la categoria della banca, rimasta vuota, viene cancellata.
 create or replace function public.applica_mappatura_esistenti()
 returns trigger
 language plpgsql
 as $$
 begin
+  insert into public.budget (categoria_id, anno, importo_mensile)
+  select new.categoria_id, b.anno, b.importo_mensile
+  from public.budget b
+  join public.categorie c on c.id = b.categoria_id
+  where c.nome = new.categoria_banca and c.id <> new.categoria_id and b.importo_mensile > 0
+  on conflict (categoria_id, anno) do nothing;
+
   update public.movimenti mv
   set categoria_id = new.categoria_id
   from public.categorie c
@@ -213,6 +222,103 @@ create trigger categorie_rinomina
 after update of nome on public.categorie
 for each row execute function public.rinomina_categoria();
 
+-- Budget dell'anno in corso e di quelli futuri (gli anni passati non si toccano):
+--  1. se l'anno non ha ancora budget, copia quelli dell'ultimo anno precedente con budget;
+--  2. ogni categoria di uscita (tranne quelle della banca già mappate su un'altra) ha la
+--     sua riga, a 0 se manca, da compilare nel Table Editor o dalla Dashboard.
+-- Per il sito un budget a 0 vale come "nessun budget".
+create or replace function public.copia_budget_anno(p_anno integer)
+returns void
+language plpgsql
+as $$
+begin
+  if p_anno < extract(year from now())::integer then
+    return;
+  end if;
+  -- le righe a 0 non contano come "budget dell'anno"
+  if not exists (select 1 from public.budget where anno = p_anno and importo_mensile > 0) then
+    insert into public.budget (categoria_id, anno, importo_mensile)
+    select categoria_id, p_anno, importo_mensile
+    from public.budget
+    where anno = (select max(anno) from public.budget where anno < p_anno and importo_mensile > 0)
+    on conflict (categoria_id, anno) do nothing;
+  end if;
+  insert into public.budget (categoria_id, anno, importo_mensile)
+  select c.id, p_anno, 0
+  from public.categorie c
+  where c.tipo = 'uscita'
+    and not exists (select 1 from public.mappatura_categorie m where m.categoria_banca = c.nome)
+  on conflict (categoria_id, anno) do nothing;
+end;
+$$;
+
+-- Il primo movimento di un anno nuovo prepara i budget di quell'anno
+create or replace function public.budget_anno_nuovo()
+returns trigger
+language plpgsql
+as $$
+begin
+  if not exists (select 1 from public.budget where anno = extract(year from new.data)::integer and importo_mensile > 0) then
+    perform public.copia_budget_anno(extract(year from new.data)::integer);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists movimenti_budget_anno_nuovo on public.movimenti;
+create trigger movimenti_budget_anno_nuovo
+after insert on public.movimenti
+for each row execute function public.budget_anno_nuovo();
+
+-- Ogni nuova categoria di uscita riceve la sua riga di budget a 0 nell'anno in corso
+-- (se l'anno è nuovo, dopo aver copiato i budget dell'anno precedente)
+create or replace function public.budget_per_nuova_categoria()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.tipo = 'uscita' then
+    perform public.copia_budget_anno(extract(year from now())::integer);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists categorie_budget_zero on public.categorie;
+create trigger categorie_budget_zero
+after insert on public.categorie
+for each row execute function public.budget_per_nuova_categoria();
+
+-- Categorie senza movimenti: quando l'ultimo movimento lascia una categoria (eliminato o
+-- spostato su un'altra) la categoria viene cancellata, insieme ai suoi budget.
+-- Restano le categorie usate come destinazione di una mappatura.
+create or replace function public.elimina_categoria_orfana(p_categoria bigint)
+returns void
+language sql
+as $$
+  delete from public.categorie c
+  where c.id = p_categoria
+    and not exists (select 1 from public.movimenti mv where mv.categoria_id = c.id)
+    and not exists (select 1 from public.mappatura_categorie m where m.categoria_id = c.id);
+$$;
+
+create or replace function public.pulisci_categoria_movimento()
+returns trigger
+language plpgsql
+as $$
+begin
+  if old.categoria_id is not null and (tg_op = 'DELETE' or old.categoria_id is distinct from new.categoria_id) then
+    perform public.elimina_categoria_orfana(old.categoria_id);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists movimenti_pulisci_categorie on public.movimenti;
+create trigger movimenti_pulisci_categorie
+after delete or update of categoria_id on public.movimenti
+for each row execute function public.pulisci_categoria_movimento();
+
 -- Accesso libero con la chiave pubblica, come Listino Prezzi
 do $$
 declare
@@ -250,7 +356,17 @@ from (values
 join public.categorie c on c.nome = m.mia and c.tipo = 'uscita'
 on conflict (categoria_banca) do nothing;
 
--- Applica una volta la mappatura a tutti i movimenti già presenti
+-- Applica una volta la mappatura a tutti i movimenti già presenti, dopo aver copiato
+-- i budget delle categorie della banca su quelle mappate (dove mancano)
+insert into public.budget (categoria_id, anno, importo_mensile)
+select distinct on (m.categoria_id, b.anno) m.categoria_id, b.anno, b.importo_mensile
+from public.budget b
+join public.categorie c on c.id = b.categoria_id
+join public.mappatura_categorie m on m.categoria_banca = c.nome
+where m.categoria_id <> c.id and b.importo_mensile > 0
+order by m.categoria_id, b.anno, b.importo_mensile desc
+on conflict (categoria_id, anno) do nothing;
+
 update public.movimenti mv
 set categoria_id = m.categoria_id
 from public.categorie c
@@ -265,6 +381,14 @@ update public.movimenti mv set categoria = c.nome
 from public.categorie c where c.id = mv.categoria_id and mv.categoria is distinct from c.nome;
 update public.mappatura_categorie m set categoria = c.nome
 from public.categorie c where c.id = m.categoria_id and m.categoria is distinct from c.nome;
+
+-- Cancella una volta le categorie che oggi non hanno movimenti (e i loro budget)
+delete from public.categorie c
+where not exists (select 1 from public.movimenti mv where mv.categoria_id = c.id)
+  and not exists (select 1 from public.mappatura_categorie m where m.categoria_id = c.id);
+
+-- Righe di budget dell'anno in corso per tutte le categorie di uscita (a 0 se mancano)
+select public.copia_budget_anno(extract(year from now())::integer);
 
 -- Permette le somme nelle query (totali della lista movimenti e del riepilogo)
 alter role authenticator set pgrst.db_aggregates_enabled = 'true';
