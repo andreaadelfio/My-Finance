@@ -213,6 +213,33 @@ input {
   color: var(--ink-soft);
 }
 
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+}
+
+.toggle {
+  display: inline-flex;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  overflow: hidden;
+  align-self: center;
+}
+
+.toggle-button {
+  border: 0;
+  background: var(--surface);
+  color: var(--accent-deep);
+  padding: 0.35rem 1rem;
+  cursor: pointer;
+}
+
+.toggle-button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .saldo-field {
   display: flex;
   align-items: center;
@@ -223,6 +250,49 @@ input {
 .saldo-field input {
   width: 140px;
   text-align: right;
+}
+
+/* Import da Excel e mappatura */
+
+.excel-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.excel-button svg {
+  width: 18px;
+  height: 18px;
+  fill: #1d6f42;
+}
+
+.box {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.box h2 {
+  margin-top: 0;
+}
+
+.box-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.import-preview {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+details summary {
+  cursor: pointer;
+  color: var(--accent-deep);
+  margin-top: 0.5rem;
 }
 
 /* Grafici */
@@ -339,8 +409,25 @@ thead th {
   padding: 2rem;
 }
 
+.lista-fine {
+  margin: 0.75rem 0 0;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
 .movimenti-table tbody tr:hover {
   background: rgba(63, 109, 86, 0.06);
+}
+
+.movimenti-table td.over {
+  background: var(--over);
+  color: var(--negative);
+}
+
+.movimenti-table td.no-budget {
+  background: #fbefc9;
+  color: #7a5a00;
 }
 
 .movimenti-table tr.editing {
@@ -432,6 +519,11 @@ thead th {
 
   .tabs {
     margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .tab {
+    padding: 0.35rem 0.7rem;
   }
 
   .entry-form > * {
@@ -461,7 +553,7 @@ thead th {
       "operazione operazione"
       "data importo"
       "categoria azioni"
-      "note note";
+      "note budget";
     align-items: center;
     padding: 0.5rem 0;
     border-bottom: 1px solid var(--line);
@@ -478,6 +570,8 @@ thead th {
   .movimenti-table td[data-label="Categoria"] { grid-area: categoria; color: var(--ink-soft); }
   .movimenti-table td.actions { grid-area: azioni; }
   .movimenti-table td[data-label="Note"] { grid-area: note; color: var(--ink-soft); }
+  .movimenti-table td[data-label="Budget"] { grid-area: budget; font-size: 0.85rem; }
+  .movimenti-table td[data-label="Budget"]:not(:empty)::before { content: "Budget "; }
 
   .movimenti-table td[data-label="Note"]:empty {
     display: none;

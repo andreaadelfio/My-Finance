@@ -14,6 +14,8 @@ Cosa legge da ogni file:
 Si può rilanciare sugli stessi file: i movimenti già presenti non vengono duplicati
 (stessa data, importo, operazione e dettagli), così come le operazioni sugli
 investimenti già presenti; budget e saldo vengono aggiornati.
+Le categorie della banca vengono convertite con la mappatura salvata nel database
+(tabella mappatura_categorie, modificabile dal sito in Movimenti).
 URL e chiave vengono letti da assets/config.js.
 """
 import argparse
@@ -28,13 +30,6 @@ from collections import Counter
 from pathlib import Path
 
 import openpyxl
-
-# Categorie rinominate dalla banca negli anni: unificate al nome più recente
-ALIASES = {
-    "Corsi e Istruzioni": "Corsi e Istruzione",
-    "Investimenti, BDR e XME Salvadanaio": "Investimenti, BDR e Salvadanaio",
-    "Disinvestimenti, BDR e XME Salvadanaio": "Disinvestimenti, BDR e Salvadanaio",
-}
 
 CONFIG_FILE = Path(__file__).parent / "assets" / "config.js"
 
@@ -144,7 +139,7 @@ def read_table(sheet, header_row, default_tipo=None):
             "data": data,
             "operazione": text(get("operazione")),
             "dettagli": text(get("dettagli")),
-            "categoria": ALIASES.get(categoria, categoria),
+            "categoria": categoria,
             "tipo": default_tipo or ("uscita" if importo < 0 else "entrata"),
             "importo": round(importo, 2),
             "note": text(get("note")) or None,
@@ -179,13 +174,13 @@ def read_dashboard(workbook):
         for row in range(2, sheet.max_row + 1):
             nome, valore = text(sheet.cell(row, 21).value), to_number(sheet.cell(row, 22).value)
             if nome and valore:
-                budget[ALIASES.get(nome, nome)] = valore
+                budget[nome] = valore
     elif text(sheet["Q1"].value).upper() == "BUDGET":
         # 2023: categoria in colonna A, budget in colonna Q
         for row in range(2, sheet.max_row + 1):
             nome, valore = text(sheet.cell(row, 1).value), to_number(sheet.cell(row, 17).value)
             if nome and valore and not nome.startswith("Totale"):
-                budget[ALIASES.get(nome, nome)] = valore
+                budget[nome] = valore
 
     saldo = None
     for row in range(1, 5):
@@ -272,14 +267,18 @@ def main():
         raise SystemExit("Imposta supabaseUrl e supabaseKey in assets/config.js.")
     db = Supabase(url, key)
 
-    # Categorie: crea quelle mancanti
+    # Categorie: la mappatura salvata nel database (tabella mappatura_categorie,
+    # modificabile dal sito) converte le categorie della banca nelle proprie;
+    # le categorie che restano sconosciute vengono create.
     categorie = {(c["tipo"], c["nome"]): c["id"] for c in db.select_all("categorie")}
-    nuove = {(m["tipo"], m["categoria"]) for _, movimenti, *_ in files for m in movimenti if m["categoria"]}
-    nuove |= {("uscita", nome) for _, _, _, budget, _, _ in files for nome in budget}
+    mappatura = {r["categoria_banca"]: r["categoria_id"] for r in db.select_all("mappatura_categorie")}
+    nuove = {(m["tipo"], m["categoria"]) for _, movimenti, *_ in files for m in movimenti
+             if m["categoria"] and m["categoria"] not in mappatura}
+    nuove |= {("uscita", nome) for _, _, _, budget, _, _ in files for nome in budget if nome not in mappatura}
     nuove = [{"tipo": tipo, "nome": nome} for tipo, nome in sorted(nuove) if (tipo, nome) not in categorie]
     for categoria in db.insert("categorie", nuove):
         categorie[(categoria["tipo"], categoria["nome"])] = categoria["id"]
-    print(f"Categorie create: {len(nuove)}")
+    print(f"Categorie create: {len(nuove)}" + (f" ({', '.join(c['nome'] for c in nuove)})" if nuove else ""))
 
     # Movimenti: inserisce solo quelli non ancora presenti
     presenti = Counter(
@@ -301,14 +300,14 @@ def main():
                 "data": m["data"],
                 "operazione": m["operazione"],
                 "dettagli": m["dettagli"],
-                "categoria_id": categorie.get((m["tipo"], m["categoria"])),
+                "categoria_id": mappatura.get(m["categoria"]) or categorie.get((m["tipo"], m["categoria"])),
                 "importo": m["importo"],
                 "note": m["note"],
             })
         db.insert("movimenti", da_inserire)
 
         db.upsert("budget", [
-            {"categoria_id": categorie[("uscita", nome)], "anno": year, "importo_mensile": valore}
+            {"categoria_id": mappatura.get(nome) or categorie[("uscita", nome)], "anno": year, "importo_mensile": valore}
             for nome, valore in budget.items()
         ], "categoria_id,anno")
         if saldo is not None and year:

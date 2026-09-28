@@ -1,15 +1,22 @@
 const MESI = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
 const PAGE_SIZE = 1000;
+const LISTA_PAGINA = 100; // movimenti caricati a ogni scorrimento
 
 const state = {
   supabase: null,
-  year: new Date().getFullYear(),
+  year: undefined, // anno della Dashboard; null = tutti gli anni
+  tipoDashboard: "uscita", // la Dashboard mostra le uscite o le entrate
   years: [],
   categorie: [],
-  movimenti: [],
+  aggregati: [], // somme per anno, mese e categoria calcolate dal database
   budget: [],
-  saldoIniziale: null,
+  saldi: new Map(), // anno -> saldo del conto a inizio anno
+  mappatura: [], // categoria della banca -> mia categoria
+  importazione: null, // anteprima del file Excel in corso di importazione
   investimenti: [],
+  // Lista Movimenti: tutti gli anni, caricata a pagine mentre si scorre
+  lista: { righe: [], finita: false, caricamento: false, richiesta: 0 },
+  filtroTimeoutId: null,
   editingId: null,
   editingInvestimentoId: null,
   charts: {},
@@ -17,13 +24,20 @@ const state = {
 };
 
 const elements = {
-  yearSelect: document.querySelector("#year-select"),
+  yearSelects: [...document.querySelectorAll(".year-select")],
   tabs: [...document.querySelectorAll(".tab")],
   refreshButton: document.querySelector("#refresh-button"),
   feedback: document.querySelector("#feedback"),
   viewMovimenti: document.querySelector("#view-movimenti"),
-  viewRiepilogo: document.querySelector("#view-riepilogo"),
+  viewDashboard: document.querySelector("#view-dashboard"),
+  toggleButtons: [...document.querySelectorAll(".toggle-button")],
+  titoloGraficoLinee: document.querySelector("#titolo-grafico-linee"),
+  titoloGraficoCategorie: document.querySelector("#titolo-grafico-categorie"),
+  titoloCategorie: document.querySelector("#titolo-categorie"),
+  saldoField: document.querySelector("#saldo-field"),
+  titoloPeriodo: document.querySelector(".titolo-periodo"),
   viewInvestimenti: document.querySelector("#view-investimenti"),
+  viewDashboardInvestimenti: document.querySelector("#view-dashboard-investimenti"),
   chartAndamento: document.querySelector("#chart-andamento"),
   chartCategorie: document.querySelector("#chart-categorie"),
   form: document.querySelector("#movimento-form"),
@@ -36,16 +50,23 @@ const elements = {
   formSubmit: document.querySelector("#f-submit"),
   formCancel: document.querySelector("#f-cancel"),
   operazioniList: document.querySelector("#operazioni-list"),
+  filterAnno: document.querySelector("#filter-anno"),
   filterMese: document.querySelector("#filter-mese"),
   filterCategoria: document.querySelector("#filter-categoria"),
   filterTesto: document.querySelector("#filter-testo"),
   totali: document.querySelector("#totali"),
   movimentiBody: document.querySelector("#movimenti-body"),
+  excelButton: document.querySelector("#excel-button"),
+  excelInput: document.querySelector("#excel-input"),
+  importPanel: document.querySelector("#import-panel"),
+  mappaturaButton: document.querySelector("#mappatura-button"),
+  mappaturaPanel: document.querySelector("#mappatura-panel"),
+  listaFine: document.querySelector("#lista-fine"),
   saldoInput: document.querySelector("#saldo-input"),
   budgetHint: document.querySelector("#budget-hint"),
   andamentoTable: document.querySelector("#andamento-table"),
-  usciteTable: document.querySelector("#uscite-table"),
-  entrateTable: document.querySelector("#entrate-table"),
+  categorieTable: document.querySelector("#categorie-table"),
+
   invForm: document.querySelector("#investimento-form"),
   invData: document.querySelector("#i-data"),
   invNome: document.querySelector("#i-nome"),
@@ -83,7 +104,7 @@ function formatEuro(value) {
   return euroFormatter.format(value || 0);
 }
 
-// Nelle tabelle del riepilogo gli importi sono senza "€" per stare in pagina
+// Nelle tabelle della dashboard gli importi sono senza "€" per stare in pagina
 function formatNumber(value) {
   return numberFormatter.format(value || 0);
 }
@@ -112,10 +133,6 @@ function todayISO() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
-function monthIndex(movimento) {
-  return Number(movimento.data.slice(5, 7)) - 1;
-}
-
 function normalize(text) {
   return String(text || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 }
@@ -133,9 +150,12 @@ function categoriaById(id) {
   return state.categorie.find((categoria) => categoria.id === id) || null;
 }
 
-function categorieDelTipo(tipo) {
+// Categorie di un tipo; nelle tendine si nascondono quelle della banca già mappate
+// su un'altra (es. "Farmacia"), che il database sostituisce comunque da solo
+function categorieDelTipo(tipo, includiMappate = false) {
+  const mappate = new Set(includiMappate ? [] : state.mappatura.map((riga) => riga.categoria_banca));
   return state.categorie
-    .filter((categoria) => categoria.tipo === tipo)
+    .filter((categoria) => categoria.tipo === tipo && !mappate.has(categoria.nome))
     .sort((a, b) => a.nome.localeCompare(b.nome, "it"));
 }
 
@@ -185,26 +205,35 @@ async function loadYears() {
 }
 
 async function loadData() {
-  const year = state.year;
-  const [categorie, movimenti, budget, saldi, investimenti] = await Promise.all([
-    fetchAll(() => state.supabase.from("categorie").select("*").order("id")),
-    fetchAll(() => state.supabase
+  if (state.year === undefined) state.year = state.years[0]; // di default l'anno più recente
+  const aggregatiQuery = () => {
+    const query = state.supabase
       .from("movimenti")
-      .select("*")
-      .gte("data", `${year}-01-01`)
-      .lte("data", `${year}-12-31`)
-      .order("data", { ascending: false })
-      .order("id", { ascending: false })),
-    fetchAll(() => state.supabase.from("budget").select("*").lte("anno", year).order("id")),
-    state.supabase.from("saldi").select("*").eq("anno", year),
-    fetchAll(() => state.supabase.from("investimenti").select("*").order("data").order("id"))
+      .select("anno,mese,categoria_id,importo.sum(),id.count()")
+      .order("anno")
+      .order("mese");
+    return state.year === null ? query : query.eq("anno", state.year);
+  };
+  const [categorie, aggregati, budget, saldi, investimenti, mappatura] = await Promise.all([
+    fetchAll(() => state.supabase.from("categorie").select("*").order("id")),
+    fetchAll(aggregatiQuery),
+    fetchAll(() => state.supabase.from("budget").select("*").order("id")),
+    fetchAll(() => state.supabase.from("saldi").select("*").order("anno")),
+    fetchAll(() => state.supabase.from("investimenti").select("*").order("data").order("id")),
+    fetchAll(() => state.supabase.from("mappatura_categorie").select("*").order("categoria_banca"))
   ]);
-  if (saldi.error) throw saldi.error;
 
   state.categorie = categorie;
-  state.movimenti = movimenti.map((movimento) => ({ ...movimento, importo: Number(movimento.importo) }));
+  state.mappatura = mappatura;
+  state.aggregati = aggregati.map((riga) => ({
+    anno: riga.anno,
+    mese: riga.mese,
+    categoria_id: riga.categoria_id,
+    somma: Number(riga.sum),
+    operazioni: Number(riga.count)
+  }));
   state.budget = budget.map((riga) => ({ ...riga, importo_mensile: Number(riga.importo_mensile) }));
-  state.saldoIniziale = saldi.data.length ? Number(saldi.data[0].saldo_iniziale) : null;
+  state.saldi = new Map(saldi.map((riga) => [riga.anno, Number(riga.saldo_iniziale)]));
   state.investimenti = investimenti.map((riga) => ({
     ...riga,
     importo: Number(riga.importo),
@@ -213,7 +242,6 @@ async function loadData() {
 }
 
 async function reload() {
-  elements.movimentiBody.innerHTML = '<tr><td colspan="6" class="empty">Caricamento...</td></tr>';
   try {
     await loadYears();
     await loadData();
@@ -223,6 +251,7 @@ async function reload() {
     return;
   }
   renderAll();
+  await loadMovimentiPage(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -230,10 +259,11 @@ async function reload() {
 // ---------------------------------------------------------------------------
 
 function renderYearSelect() {
-  elements.yearSelect.innerHTML = state.years
-    .map((year) => `<option value="${year}">${year}</option>`)
-    .join("");
-  elements.yearSelect.value = String(state.year);
+  for (const select of elements.yearSelects) {
+    select.innerHTML = state.years.map((year) => `<option value="${year}">${year}</option>`).join("")
+      + '<option value="">Tutti gli anni</option>';
+    select.value = state.year === null ? "" : String(state.year);
+  }
 }
 
 function categoryOptions(tipo) {
@@ -251,55 +281,140 @@ function renderFormCategories(selectedId = "") {
 }
 
 function renderFilters() {
+  const anno = elements.filterAnno.value;
   const mese = elements.filterMese.value;
   const categoria = elements.filterCategoria.value;
+  elements.filterAnno.innerHTML = '<option value="">Tutti gli anni</option>'
+    + state.years.map((year) => `<option value="${year}">${year}</option>`).join("");
   elements.filterMese.innerHTML = '<option value="">Tutti i mesi</option>'
     + MESI.map((nome, index) => `<option value="${index}">${nome}</option>`).join("");
   elements.filterCategoria.innerHTML = `
     <option value="">Tutte le categorie</option>
     <optgroup label="Uscite">${categoryOptions("uscita")}</optgroup>
     <optgroup label="Entrate">${categoryOptions("entrata")}</optgroup>
-    <option value="nessuna">Senza categoria</option>`;
+    <option value="nessuna">Senza categoria</option>
+    <option value="senza-budget">Uscite senza budget</option>`;
+  elements.filterAnno.value = anno;
   elements.filterMese.value = mese;
   elements.filterCategoria.value = categoria;
 }
 
 function renderOperazioniList() {
-  const operazioni = [...new Set(state.movimenti.map((movimento) => movimento.operazione).filter(Boolean))];
+  const operazioni = [...new Set(state.lista.righe.map((movimento) => movimento.operazione).filter(Boolean))];
   elements.operazioniList.innerHTML = operazioni
     .sort((a, b) => a.localeCompare(b, "it"))
     .map((operazione) => `<option value="${escapeHtml(operazione)}"></option>`)
     .join("");
 }
 
-function getFilteredMovimenti() {
+// Applica i filtri alla query: vengono calcolati dal database su tutti i movimenti
+function applyFilters(query) {
+  const anno = elements.filterAnno.value;
   const mese = elements.filterMese.value;
   const categoria = elements.filterCategoria.value;
-  const testo = normalize(elements.filterTesto.value);
-  return state.movimenti.filter((movimento) => {
-    if (mese !== "" && monthIndex(movimento) !== Number(mese)) return false;
-    if (categoria === "nessuna" && movimento.categoria_id) return false;
-    if (categoria && categoria !== "nessuna" && movimento.categoria_id !== Number(categoria)) return false;
-    if (testo && !normalize(`${movimento.operazione} ${movimento.dettagli} ${movimento.note || ""}`).includes(testo)) return false;
-    return true;
-  });
+  // Virgole, parentesi e asterischi hanno un significato nei filtri di Supabase
+  const testo = elements.filterTesto.value.replace(/[,()*%\\]/g, " ").trim();
+  if (anno) query = query.gte("data", `${anno}-01-01`).lte("data", `${anno}-12-31`);
+  if (mese !== "") query = query.eq("mese", Number(mese) + 1);
+  if (categoria === "nessuna") query = query.is("categoria_id", null);
+  else if (categoria === "senza-budget") {
+    // Uscite la cui categoria non ha budget nell'anno del movimento (come la colonna Budget)
+    const parti = (anno ? [Number(anno)] : state.years).map((a) => {
+      const ids = categorieDelTipo("uscita").filter((c) => budgetFor(c.id, a) === null).map((c) => c.id);
+      return ids.length ? `and(anno.eq.${a},categoria_id.in.(${ids.join(",")}))` : null;
+    }).filter(Boolean);
+    query = parti.length ? query.or(parti.join(",")).lt("importo", 0) : query.eq("id", -1);
+  }
+  else if (categoria) query = query.eq("categoria_id", Number(categoria));
+  if (testo) query = query.or(`operazione.ilike.*${testo}*,dettagli.ilike.*${testo}*,note.ilike.*${testo}*`);
+  return query;
+}
+
+// Carica la pagina successiva della lista (reset = ricomincia dopo un cambio filtri)
+async function loadMovimentiPage(reset = false) {
+  const lista = state.lista;
+  if (reset) {
+    lista.righe = [];
+    lista.finita = false;
+    lista.caricamento = false;
+    lista.richiesta += 1;
+    renderMovimenti();
+    loadTotali();
+  }
+  if (lista.caricamento || lista.finita) return;
+  const richiesta = lista.richiesta;
+  lista.caricamento = true;
+  const from = lista.righe.length;
+  const { data, error } = await applyFilters(state.supabase.from("movimenti").select("*"))
+    .order("data", { ascending: false })
+    .order("id", { ascending: false })
+    .range(from, from + LISTA_PAGINA - 1);
+  if (richiesta !== lista.richiesta) return; // i filtri sono cambiati nel frattempo
+  lista.caricamento = false;
+  if (error) {
+    showFeedback(`Errore nel caricamento dei movimenti: ${error.message}`, "error");
+    return;
+  }
+  lista.righe.push(...data.map((movimento) => ({ ...movimento, importo: Number(movimento.importo) })));
+  lista.finita = data.length < LISTA_PAGINA;
+  renderMovimenti();
+  renderOperazioniList();
+}
+
+async function loadTotali() {
+  const richiesta = state.lista.richiesta;
+  const somma = () => applyFilters(state.supabase.from("movimenti").select("importo.sum()"));
+  const [conteggio, entrate, uscite] = await Promise.all([
+    applyFilters(state.supabase.from("movimenti").select("id", { count: "exact", head: true })),
+    somma().gt("importo", 0),
+    somma().lt("importo", 0)
+  ]);
+  if (richiesta !== state.lista.richiesta) return;
+  const errore = conteggio.error || entrate.error || uscite.error;
+  if (errore) {
+    elements.totali.textContent = `Totali non disponibili: ${errore.message}`;
+    return;
+  }
+  const totEntrate = Number(entrate.data[0]?.sum || 0);
+  const totUscite = -Number(uscite.data[0]?.sum || 0);
+  elements.totali.innerHTML = `${conteggio.count} movimenti ·
+    entrate <strong class="positive">${formatEuro(totEntrate)}</strong> ·
+    uscite <strong class="negative">${formatEuro(totUscite)}</strong> ·
+    saldo <strong>${formatEuro(totEntrate - totUscite)}</strong>`;
+}
+
+// Quando la fine della lista entra nello schermo, carica altri movimenti
+const listaObserver = new IntersectionObserver((entries) => {
+  if (entries.some((entry) => entry.isIntersecting) && !elements.viewMovimenti.classList.contains("hidden")) {
+    loadMovimentiPage();
+  }
+}, { rootMargin: "400px" });
+
+function watchListaFine() {
+  // Riosservare fa ripartire il controllo anche se la fine è già visibile
+  listaObserver.unobserve(elements.listaFine);
+  listaObserver.observe(elements.listaFine);
+}
+
+// Budget mensile della categoria nell'anno del movimento, come la colonna "Budget" dell'Excel:
+// rosso se il movimento da solo supera il budget, giallo se la categoria non ha budget
+function cellaBudget(movimento) {
+  const categoria = categoriaById(movimento.categoria_id);
+  if (!categoria || categoria.tipo !== "uscita") return '<td data-label="Budget" class="num"></td>';
+  const budget = budgetFor(categoria.id, Number(movimento.data.slice(0, 4)));
+  if (budget === null) {
+    return '<td data-label="Budget" class="num no-budget" title="Categoria senza budget: forse va mappata su un\'altra">nessuno</td>';
+  }
+  const over = -movimento.importo > budget;
+  return `<td data-label="Budget" class="num ${over ? "over" : ""}" ${over ? 'title="Il movimento supera il budget mensile"' : ""}>${formatEuro(budget)}</td>`;
 }
 
 function renderMovimenti() {
-  const movimenti = getFilteredMovimenti();
-  const entrate = movimenti.filter((m) => m.importo > 0).reduce((sum, m) => sum + m.importo, 0);
-  const uscite = movimenti.filter((m) => m.importo < 0).reduce((sum, m) => sum - m.importo, 0);
-  elements.totali.innerHTML = `${movimenti.length} movimenti ·
-    entrate <strong class="positive">${formatEuro(entrate)}</strong> ·
-    uscite <strong class="negative">${formatEuro(uscite)}</strong> ·
-    saldo <strong>${formatEuro(entrate - uscite)}</strong>`;
-
-  if (!movimenti.length) {
-    elements.movimentiBody.innerHTML = `<tr><td colspan="6" class="empty">Nessun movimento${state.movimenti.length ? " con questi filtri" : ` nel ${state.year}`}.</td></tr>`;
-    return;
-  }
-
-  elements.movimentiBody.innerHTML = movimenti.map((movimento) => `
+  const lista = state.lista;
+  if (!lista.righe.length) {
+    elements.movimentiBody.innerHTML = `<tr><td colspan="7" class="empty">${lista.finita ? "Nessun movimento con questi filtri." : "Caricamento..."}</td></tr>`;
+  } else {
+    elements.movimentiBody.innerHTML = lista.righe.map((movimento) => `
     <tr class="${movimento.id === state.editingId ? "editing" : ""}">
       <td data-label="Data">${formatDate(movimento.data)}</td>
       <td data-label="Operazione">
@@ -308,6 +423,7 @@ function renderMovimenti() {
       </td>
       <td data-label="Categoria">${escapeHtml(categoriaById(movimento.categoria_id)?.nome || "—")}</td>
       <td data-label="Importo" class="num ${movimento.importo < 0 ? "negative" : "positive"}">${formatEuro(movimento.importo)}</td>
+      ${cellaBudget(movimento)}
       <td data-label="Note">${escapeHtml(movimento.note || "")}</td>
       <td class="actions">
         <button class="icon-button" type="button" data-action="edit" data-id="${movimento.id}" title="Modifica" aria-label="Modifica">
@@ -318,19 +434,28 @@ function renderMovimenti() {
         </button>
       </td>
     </tr>`).join("");
+  }
+  elements.listaFine.textContent = !lista.righe.length ? ""
+    : lista.finita ? `Fine: ${lista.righe.length} movimenti mostrati.` : "Caricamento di altri movimenti...";
+  if (!lista.finita) watchListaFine();
+}
+
+function onFiltriChange() {
+  clearTimeout(state.filtroTimeoutId);
+  state.filtroTimeoutId = setTimeout(() => loadMovimentiPage(true), 300);
 }
 
 function resetForm() {
   state.editingId = null;
   elements.form.reset();
-  elements.formData.value = state.year === new Date().getFullYear() ? todayISO() : `${state.year}-01-01`;
+  elements.formData.value = todayISO();
   renderFormCategories();
   elements.formSubmit.textContent = "Aggiungi";
   elements.formCancel.classList.add("hidden");
 }
 
 function startEdit(id) {
-  const movimento = state.movimenti.find((m) => m.id === id);
+  const movimento = state.lista.righe.find((m) => m.id === id);
   if (!movimento) return;
   state.editingId = id;
   elements.formData.value = movimento.data;
@@ -347,13 +472,20 @@ function startEdit(id) {
 }
 
 // Suggerisce tipo e categoria usati l'ultima volta per la stessa operazione
-function suggestCategory() {
-  if (elements.formCategoria.value) return;
-  const operazione = normalize(elements.formOperazione.value);
-  const precedente = state.movimenti.find((m) => m.categoria_id && normalize(m.operazione) === operazione);
-  if (!precedente) return;
-  elements.formTipo.value = tipoMovimento(precedente);
-  renderFormCategories(precedente.categoria_id);
+async function suggestCategory() {
+  const operazione = elements.formOperazione.value.trim();
+  if (elements.formCategoria.value || !operazione) return;
+  const { data } = await state.supabase
+    .from("movimenti")
+    .select("categoria_id")
+    .ilike("operazione", operazione.replace(/[%_\\]/g, "\\$&"))
+    .not("categoria_id", "is", null)
+    .order("data", { ascending: false })
+    .limit(1);
+  const categoria = data?.length ? categoriaById(data[0].categoria_id) : null;
+  if (!categoria || elements.formCategoria.value) return;
+  elements.formTipo.value = categoria.tipo;
+  renderFormCategories(categoria.id);
 }
 
 async function createCategory() {
@@ -363,7 +495,7 @@ async function createCategory() {
     renderFormCategories();
     return;
   }
-  const esistente = categorieDelTipo(tipo).find((categoria) => normalize(categoria.nome) === normalize(nome));
+  const esistente = categorieDelTipo(tipo, true).find((categoria) => normalize(categoria.nome) === normalize(nome));
   if (esistente) {
     renderFormCategories(esistente.id);
     return;
@@ -410,15 +542,13 @@ async function handleSubmit(event) {
     return;
   }
 
-  const savedYear = Number(record.data.slice(0, 4));
-  if (savedYear !== state.year) showFeedback(`Movimento salvato nel ${savedYear}.`);
-  else showFeedback(state.editingId ? "Movimento aggiornato." : "Movimento aggiunto.");
+  showFeedback(state.editingId ? "Movimento aggiornato." : "Movimento aggiunto.");
   resetForm();
   await reload();
 }
 
 async function deleteMovimento(id) {
-  const movimento = state.movimenti.find((m) => m.id === id);
+  const movimento = state.lista.righe.find((m) => m.id === id);
   if (!movimento || !confirm(`Eliminare "${movimento.operazione}" del ${formatDate(movimento.data)}?`)) return;
   const { error } = await state.supabase.from("movimenti").delete().eq("id", id);
   if (error) {
@@ -431,22 +561,393 @@ async function deleteMovimento(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Riepilogo (come la "Dashboard Riassuntiva" dell'Excel)
+// Import da Excel ("+ Excel"): estratto conto della banca o file Portafogli.
+// Stesse regole di import_excel.py: un movimento già presente (stessa data,
+// importo, operazione e dettagli) viene saltato; le categorie della banca
+// passano dalla mappatura salvata nel database.
 // ---------------------------------------------------------------------------
 
-// Anno dei budget in uso: quello selezionato o, se non ne ha, l'ultimo precedente
-function budgetYear() {
-  const anni = state.budget.map((riga) => riga.anno).filter((anno) => anno <= state.year);
+const SHEETJS_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+
+// La libreria per leggere gli Excel si carica solo quando serve
+function loadSheetJS() {
+  if (window.XLSX) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = SHEETJS_URL;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("impossibile caricare la libreria per leggere gli Excel"));
+    document.head.append(script);
+  });
+}
+
+// Data di una cella: numero seriale di Excel oppure testo "gg/mm/aaaa"
+function excelDate(value) {
+  if (typeof value === "number") {
+    return new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * 86400000).toISOString().slice(0, 10);
+  }
+  const match = String(value ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return match ? `${match[3]}-${match[2].padStart(2, "0")}-${match[1].padStart(2, "0")}` : null;
+}
+
+function chiaveMovimento(data, importo, operazione, dettagli) {
+  return `${data}|${Number(importo).toFixed(2)}|${String(operazione || "").trim().toLowerCase()}|${String(dettagli || "").trim().toLowerCase()}`;
+}
+
+// Legge le righe sotto l'intestazione (Data, Operazione, Dettagli, Categoria, Importo, Note)
+function leggiTabella(righe, rigaIntestazione, tipoFoglio = null) {
+  const intestazione = righe[rigaIntestazione].map((cella) => String(cella ?? "").trim().toLowerCase());
+  const valore = (riga, nome) => (intestazione.includes(nome) ? riga[intestazione.indexOf(nome)] : null);
+  const testo = (v) => String(v ?? "").trim();
+  return righe.slice(rigaIntestazione + 1).map((riga) => {
+    const data = excelDate(valore(riga, "data"));
+    const grezzo = valore(riga, "importo");
+    const importo = typeof grezzo === "number" ? grezzo : parseAmount(grezzo);
+    if (!data || importo === null || importo === 0) return null;
+    return {
+      data,
+      operazione: testo(valore(riga, "operazione")),
+      dettagli: testo(valore(riga, "dettagli")),
+      categoriaBanca: testo(valore(riga, "categoria")),
+      tipo: tipoFoglio || (importo < 0 ? "uscita" : "entrata"),
+      importo: round2(importo),
+      note: testo(valore(riga, "note")) || null
+    };
+  }).filter(Boolean);
+}
+
+function leggiWorkbook(workbook) {
+  const { utils } = window.XLSX;
+  const righe = (nome) => {
+    const sheet = workbook.Sheets[nome];
+    // Alcuni export (es. Intesa) dichiarano meno righe di quelle reali: ricalcola l'intervallo dalle celle
+    const celle = Object.keys(sheet).filter((k) => !k.startsWith("!")).map((k) => utils.decode_cell(k));
+    if (celle.length) {
+      const fine = { r: Math.max(...celle.map((c) => c.r)), c: Math.max(...celle.map((c) => c.c)) };
+      sheet["!ref"] = utils.encode_range({ s: { r: 0, c: 0 }, e: fine });
+    }
+    return utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+  };
+  // File Portafogli: fogli "Uscite" ed "Entrate"
+  const fogli = [["Uscite", "uscita"], ["Entrate", "entrata"]].filter(([nome]) => workbook.SheetNames.includes(nome));
+  if (fogli.length) return fogli.flatMap(([nome, tipo]) => leggiTabella(righe(nome), 0, tipo));
+  // Estratto conto: intestazione con "Data" e "Importo" nelle prime 40 righe
+  const primo = righe(workbook.SheetNames[0]);
+  const indice = primo.slice(0, 40).findIndex((riga) => {
+    const nomi = riga.map((cella) => String(cella ?? "").trim().toLowerCase());
+    return nomi.includes("data") && nomi.includes("importo");
+  });
+  return indice === -1 ? [] : leggiTabella(primo, indice);
+}
+
+// Categoria mia per una categoria della banca: mappatura, poi stesso nome; undefined = da decidere
+function risolviCategoria(nome, tipo) {
+  if (!nome) return null;
+  const mappata = state.mappatura.find((riga) => riga.categoria_banca === nome);
+  if (mappata) return mappata.categoria_id;
+  return state.categorie.find((c) => c.nome === nome && c.tipo === tipo)?.id;
+}
+
+async function handleExcelFile(file) {
+  elements.excelInput.value = "";
+  if (!file) return;
+  elements.excelButton.disabled = true;
+  try {
+    await loadSheetJS();
+    const workbook = window.XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const movimenti = leggiWorkbook(workbook);
+    if (!movimenti.length) {
+      showFeedback("Nessun movimento trovato: serve una riga di intestazione con almeno \"Data\" e \"Importo\".", "error");
+      return;
+    }
+    const date = movimenti.map((m) => m.data).sort();
+    const esistenti = await fetchAll(() => state.supabase
+      .from("movimenti")
+      .select("data,importo,operazione,dettagli")
+      .gte("data", date[0])
+      .lte("data", date[date.length - 1])
+      .order("id"));
+    // I doppioni veri si contano: 2 righe uguali nel file e 1 nel database -> se ne aggiunge 1
+    const presenti = new Map();
+    for (const r of esistenti) {
+      const key = chiaveMovimento(r.data, r.importo, r.operazione, r.dettagli);
+      presenti.set(key, (presenti.get(key) || 0) + 1);
+    }
+    const nuovi = movimenti.filter((m) => {
+      const key = chiaveMovimento(m.data, m.importo, m.operazione, m.dettagli);
+      if (!presenti.get(key)) return true;
+      presenti.set(key, presenti.get(key) - 1);
+      return false;
+    });
+    const daDecidere = new Map();
+    for (const m of nuovi) {
+      if (risolviCategoria(m.categoriaBanca, m.tipo) !== undefined) continue;
+      const voce = daDecidere.get(m.categoriaBanca) || { tipo: m.tipo, conteggio: 0 };
+      voce.conteggio += 1;
+      daDecidere.set(m.categoriaBanca, voce);
+    }
+    state.importazione = { nomeFile: file.name, totale: movimenti.length, dal: date[0], al: date[date.length - 1], nuovi, daDecidere };
+    renderImportPanel();
+  } catch (error) {
+    console.error(error);
+    showFeedback(`File non letto: ${error.message}`, "error");
+  } finally {
+    elements.excelButton.disabled = false;
+  }
+}
+
+function opzioniCategorie(selezionata = "") {
+  const gruppo = (tipo, etichetta) => `<optgroup label="${etichetta}">${categorieDelTipo(tipo)
+    .map((c) => `<option value="${c.id}" ${String(c.id) === String(selezionata) ? "selected" : ""}>${escapeHtml(c.nome)}</option>`)
+    .join("")}</optgroup>`;
+  return gruppo("uscita", "Uscite") + gruppo("entrata", "Entrate");
+}
+
+function renderImportPanel() {
+  const imp = state.importazione;
+  if (!imp) {
+    elements.importPanel.classList.add("hidden");
+    return;
+  }
+  const entrate = imp.nuovi.filter((m) => m.importo > 0).reduce((sum, m) => sum + m.importo, 0);
+  const uscite = imp.nuovi.filter((m) => m.importo < 0).reduce((sum, m) => sum - m.importo, 0);
+  const decisioni = [...imp.daDecidere.entries()].map(([nome, voce]) => `
+    <tr>
+      <td>${escapeHtml(nome)}</td>
+      <td>${voce.tipo}</td>
+      <td class="num">${voce.conteggio}</td>
+      <td>
+        <select class="import-scelta" data-categoria-banca="${escapeHtml(nome)}" aria-label="Categoria per ${escapeHtml(nome)}">
+          <option value="nuova">Crea la categoria "${escapeHtml(nome)}"</option>
+          ${opzioniCategorie()}
+        </select>
+      </td>
+    </tr>`).join("");
+  const nomeCategoria = (m) => {
+    const id = risolviCategoria(m.categoriaBanca, m.tipo);
+    if (id === null) return "—";
+    if (id === undefined) return `<em>${escapeHtml(m.categoriaBanca)}</em>`;
+    return escapeHtml(categoriaById(id)?.nome || "?");
+  };
+  elements.importPanel.innerHTML = `
+    <h2>Importazione da "${escapeHtml(imp.nomeFile)}"</h2>
+    <p>${imp.totale} movimenti nel file (dal ${formatDate(imp.dal)} al ${formatDate(imp.al)}):
+      <strong>${imp.nuovi.length} nuovi</strong>, ${imp.totale - imp.nuovi.length} già presenti (saltati).
+      Nuove entrate <strong class="positive">${formatEuro(entrate)}</strong>, nuove uscite <strong class="negative">${formatEuro(uscite)}</strong>.</p>
+    ${imp.daDecidere.size ? `
+      <p class="hint">Categorie della banca senza corrispondenza: scegli a quale tua categoria associarle.
+        La scelta viene salvata nella mappatura e usata anche le prossime volte.</p>
+      <div class="table-wrap"><table class="summary-table">
+        <thead><tr><th>Categoria della banca</th><th>Tipo</th><th class="num">Movimenti</th><th>Mia categoria</th></tr></thead>
+        <tbody>${decisioni}</tbody>
+      </table></div>` : ""}
+    ${imp.nuovi.length ? `
+      <details>
+        <summary>Vedi i ${imp.nuovi.length} movimenti che verranno aggiunti</summary>
+        <div class="table-wrap import-preview"><table class="summary-table">
+          <thead><tr><th>Data</th><th>Operazione</th><th>Categoria</th><th class="num">Importo</th></tr></thead>
+          <tbody>${imp.nuovi.map((m) => `
+            <tr><td>${formatDate(m.data)}</td><td>${escapeHtml(m.operazione)}</td><td>${nomeCategoria(m)}</td>
+            <td class="num ${m.importo < 0 ? "negative" : "positive"}">${formatNumber(m.importo)}</td></tr>`).join("")}
+          </tbody>
+        </table></div>
+      </details>` : ""}
+    <div class="box-actions">
+      ${imp.nuovi.length ? `<button id="import-confirm" class="primary-button" type="button">Importa ${imp.nuovi.length} movimenti</button>` : ""}
+      <button id="import-cancel" class="secondary-button" type="button">${imp.nuovi.length ? "Annulla" : "Chiudi"}</button>
+    </div>`;
+  elements.importPanel.classList.remove("hidden");
+  elements.importPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function confermaImportazione() {
+  const imp = state.importazione;
+  const bottone = document.querySelector("#import-confirm");
+  bottone.disabled = true;
+  bottone.textContent = "Importazione...";
+  try {
+    // 1. Scelte per le categorie della banca sconosciute: nuova categoria o mappatura
+    for (const select of elements.importPanel.querySelectorAll(".import-scelta")) {
+      const nome = select.dataset.categoriaBanca;
+      const tipo = imp.daDecidere.get(nome).tipo;
+      if (select.value === "nuova") {
+        const { data, error } = await state.supabase.from("categorie").insert({ nome, tipo }).select().single();
+        if (error) throw error;
+        state.categorie.push(data);
+      } else {
+        const { data, error } = await state.supabase
+          .from("mappatura_categorie")
+          .insert({ categoria_banca: nome, categoria_id: Number(select.value) })
+          .select()
+          .single();
+        if (error) throw error;
+        state.mappatura.push(data);
+      }
+    }
+    // 2. Movimenti, a blocchi di 500
+    const righe = imp.nuovi.map((m) => ({
+      data: m.data,
+      operazione: m.operazione,
+      dettagli: m.dettagli,
+      categoria_id: risolviCategoria(m.categoriaBanca, m.tipo) ?? null,
+      importo: m.importo,
+      note: m.note
+    }));
+    for (let i = 0; i < righe.length; i += 500) {
+      const { error } = await state.supabase.from("movimenti").insert(righe.slice(i, i + 500));
+      if (error) throw error;
+    }
+    showFeedback(`Importati ${righe.length} movimenti da "${imp.nomeFile}".`);
+    state.importazione = null;
+    renderImportPanel();
+    await reload();
+  } catch (error) {
+    console.error(error);
+    showFeedback(`Importazione non riuscita: ${error.message}`, "error");
+    bottone.disabled = false;
+    bottone.textContent = `Importa ${imp.nuovi.length} movimenti`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mappatura categorie (categoria della banca -> mia categoria), modificabile
+// ---------------------------------------------------------------------------
+
+function renderMappatura() {
+  const righe = [...state.mappatura].sort((a, b) => a.categoria_banca.localeCompare(b.categoria_banca, "it"));
+  elements.mappaturaPanel.innerHTML = `
+    <h2>Mappatura categorie</h2>
+    <p class="hint">Quando importi un estratto conto, ogni categoria della banca a sinistra diventa la tua categoria a destra.
+      Le categorie della banca che hanno già lo stesso nome di una tua non servono qui.
+      Il database applica la mappatura da solo ai movimenti la cui categoria non ha budget nel loro anno:
+      a quelli nuovi e, quando aggiungi o cambi una voce, anche a quelli già presenti.</p>
+    <div class="table-wrap"><table class="summary-table">
+      <thead><tr><th>Categoria della banca</th><th>Mia categoria</th><th></th></tr></thead>
+      <tbody>
+        ${righe.map((riga) => `
+          <tr>
+            <td>${escapeHtml(riga.categoria_banca)}</td>
+            <td><select class="mappatura-select" data-id="${riga.id}" aria-label="Mia categoria">${opzioniCategorie(riga.categoria_id)}</select></td>
+            <td class="actions">
+              <button class="icon-button danger" type="button" data-action="mappatura-delete" data-id="${riga.id}" title="Elimina" aria-label="Elimina">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+              </button>
+            </td>
+          </tr>`).join("") || '<tr><td colspan="3" class="empty">Nessuna mappatura.</td></tr>'}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td><input id="mappatura-nuova-banca" type="text" placeholder="Categoria della banca" autocomplete="off"></td>
+          <td><select id="mappatura-nuova-categoria" aria-label="Mia categoria">${opzioniCategorie()}</select></td>
+          <td class="actions"><button id="mappatura-add" class="primary-button" type="button">Aggiungi</button></td>
+        </tr>
+      </tfoot>
+    </table></div>
+    <div class="box-actions"><button id="mappatura-close" class="secondary-button" type="button">Chiudi</button></div>`;
+}
+
+async function handleMappaturaClick(event) {
+  const target = event.target;
+  if (target.id === "mappatura-close") {
+    elements.mappaturaPanel.classList.add("hidden");
+    return;
+  }
+  if (target.id === "mappatura-add") {
+    const nome = document.querySelector("#mappatura-nuova-banca").value.trim();
+    const categoriaId = Number(document.querySelector("#mappatura-nuova-categoria").value);
+    if (!nome) return showFeedback("Scrivi il nome della categoria della banca.", "error");
+    const { data, error } = await state.supabase
+      .from("mappatura_categorie")
+      .insert({ categoria_banca: nome, categoria_id: categoriaId })
+      .select()
+      .single();
+    if (error) return showFeedback(`Mappatura non salvata: ${error.message}`, "error");
+    state.mappatura.push(data);
+    showFeedback(`Mappatura salvata: i movimenti di "${nome}" senza budget sono stati spostati.`);
+    await reload();
+    renderMappatura();
+    return;
+  }
+  const button = target.closest('button[data-action="mappatura-delete"]');
+  if (button) {
+    const id = Number(button.dataset.id);
+    const { error } = await state.supabase.from("mappatura_categorie").delete().eq("id", id);
+    if (error) return showFeedback(`Mappatura non eliminata: ${error.message}`, "error");
+    state.mappatura = state.mappatura.filter((riga) => riga.id !== id);
+    renderMappatura();
+  }
+}
+
+async function handleMappaturaChange(event) {
+  if (!event.target.matches(".mappatura-select")) return;
+  const id = Number(event.target.dataset.id);
+  const categoriaId = Number(event.target.value);
+  const { error } = await state.supabase.from("mappatura_categorie").update({ categoria_id: categoriaId }).eq("id", id);
+  if (error) return showFeedback(`Mappatura non salvata: ${error.message}`, "error");
+  state.mappatura = state.mappatura.map((riga) => (riga.id === id ? { ...riga, categoria_id: categoriaId } : riga));
+  showFeedback("Mappatura salvata: i movimenti corrispondenti senza budget sono stati spostati.");
+  await reload();
+  renderMappatura();
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard: Uscite come la "Dashboard Riassuntiva", Entrate come la "Dashboard Entrate"
+//
+// I totali arrivano già sommati dal database per anno, mese e categoria
+// (state.aggregati), per l'anno scelto o per tutti gli anni (state.year = null).
+// Con un anno: colonne = 12 mesi. Con tutti gli anni: tabelle per anno,
+// grafici mese per mese dal primo all'ultimo mese con dati.
+// ---------------------------------------------------------------------------
+
+function tuttiGliAnni() {
+  return state.year === null;
+}
+
+function tipoAggregato(riga) {
+  return categoriaById(riga.categoria_id)?.tipo || (riga.somma < 0 ? "uscita" : "entrata");
+}
+
+// Periodi: [{ key, label, anno, mese }]; mese null = anno intero
+function periodi(perGrafico) {
+  if (!tuttiGliAnni()) {
+    return MESI.map((nome, i) => ({ key: `${state.year}-${i + 1}`, label: perGrafico ? `${nome} ${state.year}` : nome, anno: state.year, mese: i + 1 }));
+  }
+  const anni = [...new Set(state.aggregati.map((r) => r.anno))].sort((a, b) => a - b);
+  if (!perGrafico) return anni.map((anno) => ({ key: String(anno), label: String(anno), anno, mese: null }));
+  const lista = [];
+  for (const anno of anni) {
+    const mesi = state.aggregati.filter((r) => r.anno === anno).map((r) => r.mese);
+    const ultimo = anno === anni[anni.length - 1] ? Math.max(...mesi) : 12;
+    const primo = anno === anni[0] ? Math.min(...mesi) : 1;
+    for (let mese = primo; mese <= ultimo; mese += 1) {
+      lista.push({ key: `${anno}-${mese}`, label: `${MESI[mese - 1]} ${anno}`, anno, mese });
+    }
+  }
+  return lista;
+}
+
+function chiavePeriodo(riga, elenco) {
+  return elenco[0]?.mese === null ? String(riga.anno) : `${riga.anno}-${riga.mese}`;
+}
+
+// Budget di una categoria per un anno: quello dell'anno o dell'ultimo anno precedente con budget
+function budgetYear(anno = state.year) {
+  const anni = state.budget.map((riga) => riga.anno).filter((a) => a <= anno);
   return anni.length ? Math.max(...anni) : null;
 }
 
-function budgetFor(categoriaId) {
-  const anno = budgetYear();
-  const riga = state.budget.find((r) => r.categoria_id === categoriaId && r.anno === anno);
-  return riga ? riga.importo_mensile : null;
+function budgetFor(categoriaId, anno = state.year) {
+  const annoBudget = budgetYear(anno);
+  const riga = state.budget.find((r) => r.categoria_id === categoriaId && r.anno === annoBudget);
+  if (riga) return riga.importo_mensile;
+  // Anni in cui la categoria non era ancora nel budget: vale il primo budget successivo
+  const successivo = state.budget
+    .filter((r) => r.categoria_id === categoriaId && r.anno > anno)
+    .sort((a, b) => a.anno - b.anno)[0];
+  return successivo ? successivo.importo_mensile : null;
 }
 
-// Media sui soli mesi con importo, come AVERAGEIF(..., "<>0") nell'Excel
+// Media sulle sole colonne con importo, come AVERAGEIF(..., "<>0") nell'Excel
 function mediaMesiAttivi(valori) {
   const attivi = valori.filter((valore) => valore !== 0);
   return attivi.length ? attivi.reduce((sum, v) => sum + v, 0) / attivi.length : 0;
@@ -456,42 +957,58 @@ function cell(value, extraClass = "") {
   return `<td class="num ${extraClass}">${value ? formatNumber(value) : '<span class="zero">—</span>'}</td>`;
 }
 
-function monthHeader(firstLabel, extra = []) {
-  return `<thead><tr><th>${firstLabel}</th>${MESI.map((m) => `<th class="num">${m}</th>`).join("")}${extra.map((e) => `<th class="num">${e}</th>`).join("")}</tr></thead>`;
+function periodHeader(firstLabel, elenco, extra = []) {
+  return `<thead><tr><th>${firstLabel}</th>${elenco.map((p) => `<th class="num">${p.label}</th>`).join("")}${extra.map((e) => `<th class="num">${e}</th>`).join("")}</tr></thead>`;
 }
 
-function totalsByCategory(tipo) {
+// Totali per categoria e periodo: Map(categoria_id | "nessuna" -> { valori, operazioni })
+function totalsByCategory(tipo, elenco) {
+  const indice = new Map(elenco.map((p, i) => [p.key, i]));
   const rows = new Map();
-  for (const movimento of state.movimenti) {
-    if (tipoMovimento(movimento) !== tipo) continue;
-    const key = movimento.categoria_id || "nessuna";
-    if (!rows.has(key)) rows.set(key, { mesi: Array(12).fill(0), operazioni: 0 });
+  for (const riga of state.aggregati) {
+    if (tipoAggregato(riga) !== tipo) continue;
+    const i = indice.get(chiavePeriodo(riga, elenco));
+    if (i === undefined) continue;
+    const key = riga.categoria_id || "nessuna";
+    if (!rows.has(key)) rows.set(key, { valori: Array(elenco.length).fill(0), operazioni: 0 });
     const row = rows.get(key);
-    row.mesi[monthIndex(movimento)] += tipo === "uscita" ? -movimento.importo : movimento.importo;
-    row.operazioni += 1;
+    row.valori[i] = round2(row.valori[i] + (tipo === "uscita" ? -riga.somma : riga.somma));
+    row.operazioni += riga.operazioni;
   }
   return rows;
 }
 
-function renderAndamento() {
-  const entrate = Array(12).fill(0);
-  const uscite = Array(12).fill(0);
-  let ultimoMese = -1;
-  for (const movimento of state.movimenti) {
-    const mese = monthIndex(movimento);
-    ultimoMese = Math.max(ultimoMese, mese);
-    if (tipoMovimento(movimento) === "uscita") uscite[mese] -= movimento.importo;
-    else entrate[mese] += movimento.importo;
+// Entrate, uscite, risparmio e saldo del conto per periodo
+function andamento(elenco) {
+  const indice = new Map(elenco.map((p, i) => [p.key, i]));
+  const entrate = Array(elenco.length).fill(0);
+  const uscite = Array(elenco.length).fill(0);
+  let ultimo = -1;
+  for (const riga of state.aggregati) {
+    const i = indice.get(chiavePeriodo(riga, elenco));
+    if (i === undefined) continue;
+    ultimo = Math.max(ultimo, i);
+    if (tipoAggregato(riga) === "uscita") uscite[i] -= riga.somma;
+    else entrate[i] += riga.somma;
   }
   const risparmio = entrate.map((valore, i) => round2(valore - uscite[i]));
 
-  let saldo = state.saldoIniziale;
-  const saldi = risparmio.map((valore, i) => {
-    if (saldo === null || i > ultimoMese) return null;
-    saldo = round2(saldo + valore);
+  // Il saldo riparte dal "saldo a inizio anno" di ogni anno che lo ha impostato
+  let saldo = null;
+  const saldi = elenco.map((p, i) => {
+    const inizioAnno = p.mese === null || p.mese === 1 || i === 0;
+    if (inizioAnno && state.saldi.has(p.anno)) saldo = state.saldi.get(p.anno);
+    if (saldo === null || i > ultimo) return null;
+    saldo = round2(saldo + risparmio[i]);
     return saldo;
   });
+  return { entrate: entrate.map(round2), uscite: uscite.map(round2), risparmio, saldi };
+}
 
+function renderAndamento() {
+  const elenco = periodi(false);
+  const { entrate, uscite, risparmio, saldi } = andamento(elenco);
+  const media = tuttiGliAnni() ? "Media annua" : "Media mensile";
   const sum = (valori) => valori.reduce((total, v) => total + v, 0);
   const row = (label, valori, className = "") => `
     <tr class="${className}">
@@ -500,86 +1017,107 @@ function renderAndamento() {
       ${cell(sum(valori), sum(valori) < 0 ? "negative" : "")}
       ${cell(mediaMesiAttivi(valori))}
     </tr>`;
+  const nessunSaldo = saldi.every((v) => v === null);
 
-  elements.andamentoTable.innerHTML = `
-    ${monthHeader("", ["Totale anno", "Media mensile"])}
+  elements.andamentoTable.innerHTML = !elenco.length ? '<tbody><tr><td class="empty">Nessun dato.</td></tr></tbody>' : `
+    ${periodHeader("", elenco, [tuttiGliAnni() ? "Totale" : "Totale anno", media])}
     <tbody>
       ${row("Entrate", entrate)}
       ${row("Uscite", uscite)}
       ${row("Risparmio", risparmio, "strong-row")}
       <tr>
-        <th>Saldo conto</th>
+        <th>Saldo conto${tuttiGliAnni() ? " (fine anno)" : ""}</th>
         ${saldi.map((v) => (v === null ? '<td class="num"><span class="zero">—</span></td>' : cell(v))).join("")}
-        <td class="num" colspan="2">${state.saldoIniziale === null ? '<span class="zero">imposta il saldo iniziale</span>' : ""}</td>
+        <td class="num" colspan="2">${nessunSaldo ? '<span class="zero">imposta il saldo iniziale</span>' : ""}</td>
       </tr>
     </tbody>`;
-  return { entrate, uscite, risparmio, saldi };
 }
 
 function renderCategoryTable(table, tipo) {
-  const rows = totalsByCategory(tipo);
-  const withBudget = tipo === "uscita";
-  const categorie = categorieDelTipo(tipo).filter((c) => rows.has(c.id));
-  const lines = categorie.map((c) => ({ id: c.id, nome: c.nome, ...(rows.get(c.id) || { mesi: Array(12).fill(0), operazioni: 0 }) }));
+  const elenco = periodi(false);
+  const rows = totalsByCategory(tipo, elenco);
+  // Budget modificabile solo per un singolo anno
+  const withBudget = tipo === "uscita" && !tuttiGliAnni();
+  const conBudget = tipo === "uscita";
+  const categorie = categorieDelTipo(tipo, true).filter((c) => rows.has(c.id));
+  const lines = categorie.map((c) => ({ id: c.id, nome: c.nome, ...rows.get(c.id) }));
   if (rows.has("nessuna")) lines.push({ id: "nessuna", nome: "Senza categoria", ...rows.get("nessuna") });
 
   if (!lines.length) {
-    table.innerHTML = '<tbody><tr><td class="empty">Nessun dato per quest\'anno.</td></tr></tbody>';
+    table.innerHTML = '<tbody><tr><td class="empty">Nessun dato.</td></tr></tbody>';
     return;
   }
 
-  const totaliMese = Array(12).fill(0);
+  const totali = Array(elenco.length).fill(0);
   let budgetTotale = 0;
   const body = lines.map((line) => {
     const budget = line.id === "nessuna" ? null : budgetFor(line.id);
     if (budget) budgetTotale += budget;
-    const mesi = line.mesi.map((valore, i) => {
-      totaliMese[i] += valore;
-      const over = withBudget && budget !== null && valore > budget;
-      const link = valore ? `data-mese="${i}" data-categoria="${line.id}"` : "";
-      return `<td class="num ${over ? "over" : ""} ${valore ? "clickable" : ""}" ${link} ${over ? `title="Oltre il budget di ${formatEuro(valore - budget)}"` : ""}>${valore ? formatNumber(valore) : '<span class="zero">—</span>'}</td>`;
+    const celle = line.valori.map((valore, i) => {
+      totali[i] += valore;
+      const p = elenco[i];
+      // Con tutti gli anni il confronto è con il budget annuale (12 mesi)
+      const mensile = conBudget && line.id !== "nessuna" ? budgetFor(line.id, p.anno) : null;
+      const limite = mensile === null ? null : p.mese === null ? mensile * 12 : mensile;
+      const over = limite !== null && valore > limite;
+      const link = valore ? `data-anno="${p.anno}" data-mese="${p.mese === null ? "" : p.mese - 1}" data-categoria="${line.id}"` : "";
+      return `<td class="num ${over ? "over" : ""} ${valore ? "clickable" : ""}" ${link} ${over ? `title="Oltre il budget di ${formatEuro(valore - limite)}"` : ""}>${valore ? formatNumber(valore) : '<span class="zero">—</span>'}</td>`;
     }).join("");
-    const totale = line.mesi.reduce((s, v) => s + v, 0);
+    const totale = line.valori.reduce((s, v) => s + v, 0);
     const budgetCell = !withBudget ? "" : line.id === "nessuna"
       ? "<td></td>"
       : `<td class="num"><input class="budget-input" data-categoria="${line.id}" type="text" inputmode="decimal" value="${budget === null ? "" : String(budget).replace(".", ",")}" aria-label="Budget mensile ${escapeHtml(line.nome)}"></td>`;
     return `
       <tr>
-        <th class="clickable" data-categoria="${line.id}">${escapeHtml(line.nome)}</th>
-        ${mesi}
+        <th class="clickable" data-anno="${state.year ?? ""}" data-mese="" data-categoria="${line.id}">${escapeHtml(line.nome)}</th>
+        ${celle}
         ${cell(totale, "strong")}
-        ${cell(mediaMesiAttivi(line.mesi))}
+        ${cell(mediaMesiAttivi(line.valori))}
         ${budgetCell}
         <td class="num">${line.operazioni || ""}</td>
       </tr>`;
   }).join("");
 
-  const totaleAnno = totaliMese.reduce((s, v) => s + v, 0);
+  const totaleAnno = totali.reduce((s, v) => s + v, 0);
   table.innerHTML = `
-    ${monthHeader("Categoria", ["Totale", "Media", ...(withBudget ? ["Budget"] : []), "Op."])}
+    ${periodHeader("Categoria", elenco, ["Totale", "Media", ...(withBudget ? ["Budget"] : []), "Op."])}
     <tbody>${body}</tbody>
     <tfoot>
       <tr>
         <th>Totale</th>
-        ${totaliMese.map((v) => cell(v)).join("")}
+        ${totali.map((v) => cell(v)).join("")}
         ${cell(totaleAnno)}
-        ${cell(mediaMesiAttivi(totaliMese))}
+        ${cell(mediaMesiAttivi(totali))}
         ${withBudget ? cell(budgetTotale) : ""}
         <td class="num">${lines.reduce((s, l) => s + l.operazioni, 0)}</td>
       </tr>
     </tfoot>`;
 }
 
-function renderRiepilogo() {
+function renderDashboard() {
+  const uscite = state.tipoDashboard === "uscita";
+  elements.toggleButtons.forEach((button) => button.classList.toggle("active", button.dataset.tipo === state.tipoDashboard));
+  elements.titoloGraficoLinee.textContent = uscite
+    ? "Uscite, entrate, risparmio e saldo mensili"
+    : "Entrate per categoria nel tempo";
+  elements.titoloGraficoCategorie.textContent = uscite
+    ? "Categorie per spesa (interno) e per n° operazioni (esterno)"
+    : "Totale per categoria";
+  elements.titoloCategorie.textContent = uscite ? "Uscite per categoria" : "Entrate per categoria";
   const anno = budgetYear();
-  elements.budgetHint.textContent = anno !== null && anno !== state.year
-    ? `Budget mensili del ${anno} (non ci sono ancora budget per il ${state.year}: modificandone uno si copiano tutti nel ${state.year}).`
-    : "Budget mensili: le celle rosse lo superano.";
-  elements.saldoInput.value = state.saldoIniziale === null ? "" : String(state.saldoIniziale).replace(".", ",");
-  const andamento = renderAndamento();
-  renderCategoryTable(elements.usciteTable, "uscita");
-  renderCategoryTable(elements.entrateTable, "entrata");
-  renderCharts(andamento);
+  elements.budgetHint.textContent = !uscite ? "" : tuttiGliAnni()
+    ? "Con tutti gli anni le celle rosse superano il budget annuale (12 mesi); il budget si modifica scegliendo un anno."
+    : anno !== null && anno !== state.year
+      ? `Budget mensili del ${anno} (non ci sono ancora budget per il ${state.year}: modificandone uno si copiano tutti nel ${state.year}).`
+      : "Budget mensili: le celle rosse lo superano.";
+  elements.saldoField.classList.toggle("hidden", tuttiGliAnni());
+  const saldo = state.saldi.get(state.year);
+  elements.saldoInput.value = saldo === undefined ? "" : String(saldo).replace(".", ",");
+  elements.titoloPeriodo.textContent = tuttiGliAnni() ? "Andamento annuale" : "Andamento mensile";
+  renderAndamento();
+  renderCategoryTable(elements.categorieTable, state.tipoDashboard);
+  if (uscite) renderCharts();
+  else renderEntrateCharts();
 }
 
 // ---------------------------------------------------------------------------
@@ -621,11 +1159,41 @@ function drawChart(key, canvas, config) {
   state.charts[key] = new window.Chart(canvas, config);
 }
 
-function renderCharts({ entrate, uscite, risparmio, saldi }) {
+const euroTooltip = { callbacks: { label: (item) => `${item.dataset.label}: ${formatEuro(item.raw)}` } };
+const euroAxis = { y: { ticks: { callback: (value) => formatEuro(value) } } };
+
+function percentTooltip(formatValue) {
+  return {
+    callbacks: {
+      label: (item) => {
+        const total = item.dataset.data.reduce((sum, v) => sum + v, 0);
+        return `${item.label}: ${formatValue(item)} (${Math.round((item.raw / total) * 100)}%)`;
+      }
+    }
+  };
+}
+
+// Totali dell'intero periodo scelto per ogni categoria di un tipo
+function totaliCategorie(tipo) {
+  const elenco = periodi(false);
+  return [...totalsByCategory(tipo, elenco).entries()]
+    .map(([id, riga]) => ({
+      id,
+      nome: id === "nessuna" ? "Senza categoria" : categoriaById(id)?.nome || "?",
+      totale: round2(riga.valori.reduce((sum, v) => sum + v, 0)),
+      valori: riga.valori,
+      operazioni: riga.operazioni
+    }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "it"));
+}
+
+function renderCharts() {
+  const elenco = periodi(true);
+  const { entrate, uscite, risparmio, saldi } = andamento(elenco);
   drawChart("andamento", elements.chartAndamento, {
     type: "line",
     data: {
-      labels: MESI.map((mese) => `${mese} ${state.year}`),
+      labels: elenco.map((p) => p.label),
       datasets: [
         { label: "Totale Uscite", data: uscite, borderColor: "#4472c4", backgroundColor: "#4472c4" },
         { label: "Totale Entrate", data: entrate, borderColor: "#ed7d31", backgroundColor: "#ed7d31" },
@@ -636,31 +1204,21 @@ function renderCharts({ entrate, uscite, risparmio, saldi }) {
     options: {
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: { position: "bottom" },
-        tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${formatEuro(item.raw)}` } }
-      },
-      scales: { y: { ticks: { callback: (value) => formatEuro(value) } } }
+      elements: { point: { radius: tuttiGliAnni() ? 0 : 3 } },
+      plugins: { legend: { position: "bottom" }, tooltip: euroTooltip },
+      scales: euroAxis
     }
   });
 
-  const righe = totalsByCategory("uscita");
-  const categorie = [...righe.entries()]
-    .map(([id, riga]) => ({
-      nome: id === "nessuna" ? "Senza categoria" : categoriaById(id)?.nome || "?",
-      spesa: round2(riga.mesi.reduce((sum, v) => sum + v, 0)),
-      operazioni: riga.operazioni
-    }))
-    .sort((a, b) => a.nome.localeCompare(b.nome, "it"));
+  const categorie = totaliCategorie("uscita");
   const colori = categorie.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
-
   drawChart("categorie", elements.chartCategorie, {
     type: "doughnut",
     data: {
       labels: categorie.map((c) => c.nome),
       datasets: [
         { label: "N° operazioni", data: categorie.map((c) => c.operazioni), backgroundColor: colori },
-        { label: "Spesa", data: categorie.map((c) => Math.max(0, c.spesa)), backgroundColor: colori }
+        { label: "Spesa", data: categorie.map((c) => Math.max(0, c.totale)), backgroundColor: colori }
       ]
     },
     options: {
@@ -668,18 +1226,52 @@ function renderCharts({ entrate, uscite, risparmio, saldi }) {
       cutout: "35%",
       plugins: {
         legend: { position: window.innerWidth < 720 ? "bottom" : "right", labels: { boxWidth: 12, font: { size: 11 } } },
-        tooltip: {
-          callbacks: {
-            label: (item) => {
-              const total = item.dataset.data.reduce((sum, v) => sum + v, 0);
-              const value = item.dataset.label === "Spesa" ? formatEuro(item.raw) : `${item.raw} operazioni`;
-              return `${item.label}: ${value} (${Math.round((item.raw / total) * 100)}%)`;
-            }
-          }
-        }
+        tooltip: percentTooltip((item) => (item.dataset.label === "Spesa" ? formatEuro(item.raw) : `${item.raw} operazioni`))
       }
     },
     plugins: [percentLabels]
+  });
+}
+
+function renderEntrateCharts() {
+  const categorie = totaliCategorie("entrata");
+  const colori = categorie.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
+  drawChart("categorie", elements.chartCategorie, {
+    type: "pie",
+    data: {
+      labels: categorie.map((c) => c.nome),
+      datasets: [{ label: "Totale", data: categorie.map((c) => Math.max(0, c.totale)), backgroundColor: colori }]
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: window.innerWidth < 720 ? "bottom" : "right" },
+        tooltip: percentTooltip((item) => formatEuro(item.raw))
+      }
+    },
+    plugins: [percentLabels]
+  });
+
+  const elenco = periodi(true);
+  const perCategoria = totalsByCategory("entrata", elenco);
+  drawChart("andamento", elements.chartAndamento, {
+    type: "line",
+    data: {
+      labels: elenco.map((p) => p.label),
+      datasets: categorie.map((c, i) => ({
+        label: c.nome,
+        data: perCategoria.get(c.id)?.valori || [],
+        borderColor: colori[i],
+        backgroundColor: colori[i]
+      }))
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      elements: { point: { radius: tuttiGliAnni() ? 0 : 3 } },
+      plugins: { legend: { position: "bottom" }, tooltip: euroTooltip },
+      scales: euroAxis
+    }
   });
 }
 
@@ -825,7 +1417,8 @@ function renderInvestimenti() {
     <tfoot>${tipoRow("Totale", totale)}</tfoot>`;
 
   const oggi = todayISO();
-  elements.operazioniBody.innerHTML = [...righe].reverse().map((riga) => `
+  // Il registro mostra sempre tutte le operazioni, anche quelle future (in corsivo)
+  elements.operazioniBody.innerHTML = [...state.investimenti].reverse().map((riga) => `
     <tr class="${riga.data > oggi ? "future" : ""} ${riga.id === state.editingInvestimentoId ? "editing" : ""}" ${riga.data > oggi ? 'title="Operazione prevista"' : ""}>
       <td>${formatDate(riga.data)}</td>
       <td class="num">${riga.posizione}</td>
@@ -1024,11 +1617,13 @@ async function deleteInvestimento(id) {
 function showView(view) {
   elements.tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
   elements.viewMovimenti.classList.toggle("hidden", view !== "movimenti");
-  elements.viewRiepilogo.classList.toggle("hidden", view !== "riepilogo");
+  elements.viewDashboard.classList.toggle("hidden", view !== "dashboard");
   elements.viewInvestimenti.classList.toggle("hidden", view !== "investimenti");
+  elements.viewDashboardInvestimenti.classList.toggle("hidden", view !== "dashboard-investimenti");
   // I grafici disegnati mentre la sezione era nascosta vanno ridisegnati
-  if (view === "riepilogo") renderRiepilogo();
-  if (view === "investimenti") renderInvestimenti();
+  if (view === "dashboard") renderDashboard();
+  if (view === "investimenti" || view === "dashboard-investimenti") renderInvestimenti();
+  if (view === "movimenti" && !state.lista.finita) watchListaFine();
 }
 
 function renderAll() {
@@ -1036,29 +1631,36 @@ function renderAll() {
   renderFilters();
   renderOperazioniList();
   if (!state.editingId) renderFormCategories(elements.formCategoria.value);
-  renderMovimenti();
-  renderRiepilogo();
+  renderDashboard();
   renderInvestimenti();
 }
 
-// Click su un importo del riepilogo: apre i movimenti filtrati
-function openMovimentiFiltrati(mese, categoria) {
+// Click su un importo della dashboard: apre i movimenti filtrati per anno, mese e categoria
+function openMovimentiFiltrati(anno, mese, categoria) {
+  elements.filterAnno.value = anno ?? "";
   elements.filterMese.value = mese ?? "";
   elements.filterCategoria.value = categoria;
   elements.filterTesto.value = "";
-  renderMovimenti();
   showView("movimenti");
   window.scrollTo(0, 0);
+  loadMovimentiPage(true);
 }
 
 function bindEvents() {
   elements.tabs.forEach((tab) => tab.addEventListener("click", () => showView(tab.dataset.view)));
   elements.refreshButton.addEventListener("click", reload);
-  elements.yearSelect.addEventListener("change", async () => {
-    state.year = Number(elements.yearSelect.value);
-    resetForm();
-    await reload();
-  });
+  // L'anno vale per la Dashboard: la lista movimenti ha il suo filtro
+  const onYearChange = async (event) => {
+    state.year = event.target.value ? Number(event.target.value) : null;
+    try {
+      await loadData();
+    } catch (error) {
+      showFeedback(`Errore nel caricamento: ${error.message}`, "error");
+      return;
+    }
+    renderAll();
+  };
+  elements.yearSelects.forEach((select) => select.addEventListener("change", onYearChange));
 
   elements.form.addEventListener("submit", handleSubmit);
   elements.formCancel.addEventListener("click", () => {
@@ -1071,9 +1673,26 @@ function bindEvents() {
     if (elements.formCategoria.value === "nuova") createCategory();
   });
 
-  elements.filterMese.addEventListener("change", renderMovimenti);
-  elements.filterCategoria.addEventListener("change", renderMovimenti);
-  elements.filterTesto.addEventListener("input", renderMovimenti);
+  elements.excelButton.addEventListener("click", () => elements.excelInput.click());
+  elements.excelInput.addEventListener("change", () => handleExcelFile(elements.excelInput.files[0]));
+  elements.importPanel.addEventListener("click", (event) => {
+    if (event.target.id === "import-confirm") confermaImportazione();
+    if (event.target.id === "import-cancel") {
+      state.importazione = null;
+      renderImportPanel();
+    }
+  });
+  elements.mappaturaButton.addEventListener("click", () => {
+    renderMappatura();
+    elements.mappaturaPanel.classList.toggle("hidden");
+  });
+  elements.mappaturaPanel.addEventListener("click", handleMappaturaClick);
+  elements.mappaturaPanel.addEventListener("change", handleMappaturaChange);
+
+  elements.filterAnno.addEventListener("change", onFiltriChange);
+  elements.filterMese.addEventListener("change", onFiltriChange);
+  elements.filterCategoria.addEventListener("change", onFiltriChange);
+  elements.filterTesto.addEventListener("input", onFiltriChange);
 
   elements.movimentiBody.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
@@ -1083,11 +1702,15 @@ function bindEvents() {
     if (button.dataset.action === "delete") deleteMovimento(id);
   });
 
-  elements.viewRiepilogo.addEventListener("click", (event) => {
+  elements.viewDashboard.addEventListener("click", (event) => {
     const target = event.target.closest(".clickable");
-    if (target) openMovimentiFiltrati(target.dataset.mese, target.dataset.categoria);
+    if (target) openMovimentiFiltrati(target.dataset.anno, target.dataset.mese, target.dataset.categoria);
   });
-  elements.viewRiepilogo.addEventListener("change", (event) => {
+  elements.toggleButtons.forEach((button) => button.addEventListener("click", () => {
+    state.tipoDashboard = button.dataset.tipo;
+    renderDashboard();
+  }));
+  elements.viewDashboard.addEventListener("change", (event) => {
     if (event.target.matches(".budget-input")) saveBudget(event.target);
   });
   elements.saldoInput.addEventListener("change", saveSaldo);

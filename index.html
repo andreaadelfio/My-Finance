@@ -15,10 +15,10 @@
     <div class="page-shell">
       <header class="top-bar">
         <h1>MyFinance</h1>
-        <select id="year-select" aria-label="Anno"></select>
         <nav class="tabs">
-          <button class="tab active" type="button" data-view="riepilogo">Riepilogo</button>
+          <button class="tab active" type="button" data-view="dashboard">Dashboard</button>
           <button class="tab" type="button" data-view="movimenti">Movimenti</button>
+          <button class="tab" type="button" data-view="dashboard-investimenti">Dashboard investimenti</button>
           <button class="tab" type="button" data-view="investimenti">Investimenti</button>
         </nav>
         <button id="refresh-button" class="icon-button" type="button" title="Ricarica" aria-label="Ricarica">
@@ -45,9 +45,19 @@
           <input id="f-note" name="note" type="text" placeholder="Note" autocomplete="off">
           <button id="f-submit" class="primary-button" type="submit">Aggiungi</button>
           <button id="f-cancel" class="secondary-button hidden" type="button">Annulla</button>
+          <button id="excel-button" class="secondary-button excel-button" type="button" title="Importa i movimenti da un file Excel (estratto conto della banca o Portafogli)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm1 2v4h6V5H5zm8 0v4h6V5h-6zm-8 6v4h6v-4H5zm8 0v4h6v-4h-6zm-8 6v2h6v-2H5zm8 0v2h6v-2h-6z"/></svg>
+            + Excel
+          </button>
+          <input id="excel-input" type="file" accept=".xlsx,.xls" hidden>
+          <button id="mappatura-button" class="secondary-button" type="button" title="Categorie della banca e categorie tue corrispondenti">Mappatura categorie</button>
         </form>
 
+        <div id="import-panel" class="box hidden"></div>
+        <div id="mappatura-panel" class="box hidden"></div>
+
         <div class="filters">
+          <select id="filter-anno" aria-label="Anno"></select>
           <select id="filter-mese" aria-label="Mese"></select>
           <select id="filter-categoria" aria-label="Categoria"></select>
           <input id="filter-testo" type="search" placeholder="Cerca..." autocomplete="off">
@@ -62,6 +72,7 @@
                 <th>Operazione</th>
                 <th>Categoria</th>
                 <th class="num">Importo</th>
+                <th class="num" title="Budget mensile della categoria; in rosso se il movimento lo supera">Budget</th>
                 <th>Note</th>
                 <th></th>
               </tr>
@@ -69,69 +80,51 @@
             <tbody id="movimenti-body"></tbody>
           </table>
         </div>
+        <p id="lista-fine" class="lista-fine"></p>
       </section>
 
-      <!-- RIEPILOGO -->
-      <section id="view-riepilogo" class="panel">
-        <label class="saldo-field">
-          Saldo del conto a inizio anno
-          <input id="saldo-input" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off">
-        </label>
+      <!-- DASHBOARD: Uscite come la "Dashboard Riassuntiva", Entrate come la "Dashboard Entrate" dell'Excel -->
+      <section id="view-dashboard" class="panel">
+        <div class="panel-head">
+          <label class="saldo-field">
+            Anno
+            <select class="year-select" aria-label="Anno"></select>
+          </label>
+          <div class="toggle" role="group" aria-label="Mostra uscite o entrate">
+            <button type="button" class="toggle-button active" data-tipo="uscita">Uscite</button>
+            <button type="button" class="toggle-button" data-tipo="entrata">Entrate</button>
+          </div>
+          <label id="saldo-field" class="saldo-field">
+            Saldo del conto a inizio anno
+            <input id="saldo-input" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off">
+          </label>
+        </div>
 
         <div class="charts">
           <div class="chart-box">
-            <h2>Uscite, entrate, risparmio e saldo mensili</h2>
+            <h2 id="titolo-grafico-linee"></h2>
             <div class="chart-canvas"><canvas id="chart-andamento"></canvas></div>
           </div>
           <div class="chart-box">
-            <h2>Categorie per spesa (interno) e per n° operazioni (esterno)</h2>
+            <h2 id="titolo-grafico-categorie"></h2>
             <div class="chart-canvas"><canvas id="chart-categorie"></canvas></div>
           </div>
         </div>
 
-        <h2>Andamento mensile <span class="unit">(€)</span></h2>
+        <h2><span class="titolo-periodo">Andamento mensile</span> <span class="unit">(€)</span></h2>
         <div class="table-wrap">
           <table id="andamento-table" class="summary-table"></table>
         </div>
 
-        <h2>Uscite per categoria <span class="unit">(€)</span></h2>
+        <h2><span id="titolo-categorie"></span> <span class="unit">(€)</span></h2>
         <p class="hint"><span id="budget-hint"></span> Clicca un importo per vedere i movimenti.</p>
         <div class="table-wrap">
-          <table id="uscite-table" class="summary-table"></table>
-        </div>
-
-        <h2>Entrate per categoria <span class="unit">(€)</span></h2>
-        <div class="table-wrap">
-          <table id="entrate-table" class="summary-table"></table>
+          <table id="categorie-table" class="summary-table"></table>
         </div>
       </section>
 
-      <!-- INVESTIMENTI -->
-      <section id="view-investimenti" class="panel hidden">
-        <form id="investimento-form" class="entry-form">
-          <input id="i-data" type="date" required aria-label="Data">
-          <input id="i-nome" type="text" list="investimenti-list" placeholder="Nome (es. BTP...)" required autocomplete="off">
-          <datalist id="investimenti-list"></datalist>
-          <input id="i-posizione" type="number" min="0" step="1" placeholder="ID" title="ID posizione: stesso ID per le operazioni dello stesso investimento" required>
-          <input id="i-isin" type="text" placeholder="ISIN" autocomplete="off">
-          <input id="i-prodotto" type="text" placeholder="Prodotto" autocomplete="off">
-          <input id="i-tipo" type="text" list="tipi-list" placeholder="Tipo" autocomplete="off">
-          <datalist id="tipi-list"></datalist>
-          <select id="i-operazione" aria-label="Operazione">
-            <option>Investimento</option>
-            <option>Rimborso</option>
-            <option>Cedola</option>
-            <option>Dividendi</option>
-          </select>
-          <input id="i-quantita" type="text" inputmode="decimal" placeholder="Quantità" autocomplete="off">
-          <input id="i-importo" type="text" inputmode="decimal" placeholder="Importo €" required autocomplete="off">
-          <input id="i-commissioni" type="text" inputmode="decimal" placeholder="Commissioni" autocomplete="off">
-          <input id="i-tassa" type="text" inputmode="decimal" placeholder="Tassa" autocomplete="off">
-          <input id="i-note" type="text" placeholder="Note" autocomplete="off">
-          <button id="i-submit" class="primary-button" type="submit">Aggiungi</button>
-          <button id="i-cancel" class="secondary-button hidden" type="button">Annulla</button>
-        </form>
-
+      <!-- DASHBOARD INVESTIMENTI (come "Investimenti Dashboard" dell'Excel) -->
+      <section id="view-dashboard-investimenti" class="panel hidden">
         <label class="check-field">
           <input id="i-future" type="checkbox" checked>
           Includi le operazioni future previste (cedole e rimborsi già in calendario)
@@ -159,6 +152,34 @@
         <div class="table-wrap">
           <table id="tipi-table" class="summary-table"></table>
         </div>
+
+      </section>
+
+      <!-- INVESTIMENTI: registro delle operazioni -->
+      <section id="view-investimenti" class="panel hidden">
+        <form id="investimento-form" class="entry-form">
+          <input id="i-data" type="date" required aria-label="Data">
+          <input id="i-nome" type="text" list="investimenti-list" placeholder="Nome (es. BTP...)" required autocomplete="off">
+          <datalist id="investimenti-list"></datalist>
+          <input id="i-posizione" type="number" min="0" step="1" placeholder="ID" title="ID posizione: stesso ID per le operazioni dello stesso investimento" required>
+          <input id="i-isin" type="text" placeholder="ISIN" autocomplete="off">
+          <input id="i-prodotto" type="text" placeholder="Prodotto" autocomplete="off">
+          <input id="i-tipo" type="text" list="tipi-list" placeholder="Tipo" autocomplete="off">
+          <datalist id="tipi-list"></datalist>
+          <select id="i-operazione" aria-label="Operazione">
+            <option>Investimento</option>
+            <option>Rimborso</option>
+            <option>Cedola</option>
+            <option>Dividendi</option>
+          </select>
+          <input id="i-quantita" type="text" inputmode="decimal" placeholder="Quantità" autocomplete="off">
+          <input id="i-importo" type="text" inputmode="decimal" placeholder="Importo €" required autocomplete="off">
+          <input id="i-commissioni" type="text" inputmode="decimal" placeholder="Commissioni" autocomplete="off">
+          <input id="i-tassa" type="text" inputmode="decimal" placeholder="Tassa" autocomplete="off">
+          <input id="i-note" type="text" placeholder="Note" autocomplete="off">
+          <button id="i-submit" class="primary-button" type="submit">Aggiungi</button>
+          <button id="i-cancel" class="secondary-button hidden" type="button">Annulla</button>
+        </form>
 
         <h2>Operazioni</h2>
         <div class="table-wrap">
