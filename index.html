@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=19">
+    <link rel="stylesheet" href="./assets/styles.css?v=20">
   </head>
   <body>
     <div class="page-shell">
@@ -29,6 +29,7 @@
             <div class="switch" role="tablist" aria-label="Investimenti">
               <button class="tab selected" type="button" role="tab" aria-selected="false" data-view="dashboard-investimenti">Dashboard</button>
               <button class="tab" type="button" role="tab" aria-selected="false" data-view="investimenti">Posizioni</button>
+              <button class="tab" type="button" role="tab" aria-selected="false" data-view="proposte">Proposte</button>
             </div>
           </div>
         </nav>
@@ -205,11 +206,49 @@
           </table>
         </div>
       </section>
+
+      <!-- PROPOSTE: segnali sui titoli della watchlist (Edge Function "aggiorna-quotazioni", azione "watchlist") -->
+      <section id="view-proposte" class="panel hidden">
+        <div class="toolbar">
+          <button id="aggiorna-proposte" class="secondary-button" type="button" title="Riscarica da Yahoo Finance due anni di prezzi dei titoli della watchlist e ricalcola i segnali">Aggiorna analisi</button>
+          <label class="check-field" title="Quanto investiresti in una singola operazione: serve a calcolare quante azioni compri e quanto pesa la commissione">
+            Importo per operazione
+            <input id="proposte-importo" class="impostazione-input" type="text" inputmode="decimal" autocomplete="off"> €
+          </label>
+          <label class="check-field" title="Commissione fissa per ordine (Fineco: 2,95 €)">
+            Commissione
+            <input id="proposte-commissione" class="impostazione-input" type="text" inputmode="decimal" autocomplete="off"> €
+          </label>
+          <span id="proposte-info" class="hint"></span>
+        </div>
+
+        <div id="proposta-giorno" class="proposta-giorno"></div>
+
+        <details class="regole">
+          <summary>Come funzionano i segnali</summary>
+          <p>Ogni sera la funzione prende due anni di prezzi giornalieri di ogni titolo e applica regole fisse di analisi tecnica:</p>
+          <ul>
+            <li><strong>Compra</strong>: trend al rialzo (prezzo e media a 50 giorni sopra la media a 200) e prezzo sceso dal massimo di 52 settimane di almeno un quarto della volatilità annua del titolo (tra 5% e 20%), senza essere ipercomprato (RSI ≤ 55). È un ritracciamento dentro una tendenza positiva.</li>
+            <li><strong>Da valutare</strong>: nessun trend chiaro, ma titolo ipervenduto (RSI ≤ 35) e sceso dal massimo: può rimbalzare, con più rischio.</li>
+            <li><strong>Attendi</strong>: trend positivo ma vicino ai massimi, oppure ipercomprato (RSI ≥ 70), oppure nessun segnale.</li>
+            <li><strong>Evita per ora</strong>: prezzo sotto la media a 200 giorni e media a 50 sotto quella a 200: trend negativo, meglio aspettare un'inversione.</li>
+          </ul>
+          <p>Il punteggio (0-100) ordina i titoli: trend 40 punti, ritracciamento 30, RSI 20, dividendi 10. La <strong>proposta del giorno</strong> è il "Compra" con il punteggio più alto, abbassato di 10 punti per ogni titolo dello stesso settore che hai già in portafoglio (per non concentrare il rischio).</p>
+          <p>Sono regole meccaniche sui prezzi passati, non una consulenza: non conoscono bilanci, notizie né la tua situazione. Usale come punto di partenza per decidere.</p>
+        </details>
+
+        <div id="proposte-lista" class="proposte-lista"></div>
+
+        <form id="watchlist-form" class="toolbar watchlist-form">
+          <input id="watchlist-isin" type="text" placeholder="ISIN da aggiungere (es. IT0003132476)" autocomplete="off" aria-label="ISIN da aggiungere">
+          <button class="secondary-button" type="submit">+ Aggiungi alla watchlist</button>
+        </form>
+      </section>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=28"></script>
+    <script type="module" src="./assets/app.js?v=29"></script>
   </body>
 </html>

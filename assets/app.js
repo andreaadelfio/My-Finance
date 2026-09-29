@@ -17,6 +17,8 @@ const state = {
   importazione: null, // anteprima del file Excel in corso di importazione
   investimenti: [],
   quotazioni: new Map(), // posizione -> prezzo di oggi e plusvalenza (Edge Function "aggiorna-quotazioni")
+  watchlist: [], // titoli della sezione Proposte con segnale e motivi (senza lo storico, caricato a richiesta)
+  graficoProposta: null, // ISIN con il grafico aperto nella sezione Proposte
   // Lista Movimenti: tutti gli anni, caricata a pagine mentre si scorre
   lista: { righe: [], finita: false, caricamento: false, richiesta: 0 },
   filtroTimeoutId: null,
@@ -86,6 +88,15 @@ const elements = {
   investimentiSintesi: document.querySelector("#investimenti-sintesi"),
   aggiornaPrezzi: [...document.querySelectorAll(".aggiorna-prezzi")], // Dashboard investimenti e registro
   quotazioniInfo: document.querySelector("#quotazioni-info"),
+  viewProposte: document.querySelector("#view-proposte"),
+  aggiornaProposte: document.querySelector("#aggiorna-proposte"),
+  proposteImporto: document.querySelector("#proposte-importo"),
+  proposteCommissione: document.querySelector("#proposte-commissione"),
+  proposteInfo: document.querySelector("#proposte-info"),
+  propostaGiorno: document.querySelector("#proposta-giorno"),
+  proposteLista: document.querySelector("#proposte-lista"),
+  watchlistForm: document.querySelector("#watchlist-form"),
+  watchlistIsin: document.querySelector("#watchlist-isin"),
   chartTipi: document.querySelector("#chart-tipi"),
   chartInvestimenti: document.querySelector("#chart-investimenti")
 };
@@ -235,6 +246,21 @@ async function loadData() {
     valore: numero(q.valore),
     plusvalenza: numero(q.plusvalenza)
   }]));
+
+  // Watchlist senza lo storico (pesante: si carica solo per il grafico di un titolo)
+  const watchlist = await state.supabase.from("watchlist").select(COLONNE_WATCHLIST);
+  state.watchlist = (watchlist.data || []).map((t) => ({
+    ...t,
+    prezzo: numero(t.prezzo),
+    prezzo_eur: numero(t.prezzo_eur),
+    sma200: numero(t.sma200),
+    sconto: numero(t.sconto),
+    var_1m: numero(t.var_1m),
+    var_1a: numero(t.var_1a),
+    rsi: numero(t.rsi),
+    rendimento_div: numero(t.rendimento_div),
+    volatilita: numero(t.volatilita)
+  }));
 
   state.categorie = categorie;
   state.mappatura = mappatura;
@@ -1621,30 +1647,308 @@ function abpPosizione(posizione) {
   return conAbp.length ? conAbp[conAbp.length - 1].abp : null;
 }
 
+// Il motivo vero di un errore della Edge Function è nella sua risposta, non in error.message
+async function motivoErroreFunzione(error) {
+  try {
+    const risposta = error.context;
+    const corpo = await risposta.text();
+    return `${risposta.status} ${(JSON.parse(corpo).errore || JSON.parse(corpo).message) ?? corpo}`;
+  } catch {
+    // Nessuna risposta leggibile (funzione non pubblicata o rete): resta il messaggio generico
+    return error.message;
+  }
+}
+
 async function aggiornaPrezzi() {
   const bottoni = (inCorso) => elements.aggiornaPrezzi.forEach((b) => {
     b.disabled = inCorso;
     b.textContent = inCorso ? "Aggiorno..." : "Aggiorna prezzi";
   });
   bottoni(true);
-  const { data, error } = await state.supabase.functions.invoke("aggiorna-quotazioni", { body: {} });
+  const { data, error } = await state.supabase.functions.invoke("aggiorna-quotazioni", { body: { azione: "posizioni" } });
   bottoni(false);
-  if (error) {
-    // Il motivo vero è nella risposta della funzione (o nel suo stato HTTP), non in error.message
-    let motivo = error.message;
-    try {
-      const risposta = error.context;
-      const corpo = await risposta.text();
-      motivo = `${risposta.status} ${(JSON.parse(corpo).errore || JSON.parse(corpo).message) ?? corpo}`;
-    } catch {
-      // Nessuna risposta leggibile (funzione non pubblicata o rete): resta il messaggio generico
-    }
-    return showFeedback(`Prezzi non aggiornati: ${motivo}`, "error");
-  }
+  if (error) return showFeedback(`Prezzi non aggiornati: ${await motivoErroreFunzione(error)}`, "error");
   const errori = data.filter((q) => q.errore);
   showFeedback(errori.length
     ? `Prezzi aggiornati; non trovati per ${errori.map((q) => `#${q.posizione} (${q.errore})`).join(", ")}.`
     : `Prezzi aggiornati per ${data.length} posizioni.`, errori.length ? "error" : "success");
+  await reload();
+}
+
+// ---------------------------------------------------------------------------
+// Proposte: segnali sui titoli della watchlist
+// ---------------------------------------------------------------------------
+
+const COLONNE_WATCHLIST = "isin,simbolo,nome,settore,note,valuta,prezzo,prezzo_eur,data_prezzo,var_1g,var_1m,var_3m,var_1a," +
+  "massimo_52s,minimo_52s,sconto,sma50,sma200,rsi,volatilita,rendimento_div,trend,segnale,punteggio,motivi,andamento,errore,aggiornato_il";
+
+const SEGNALI = {
+  compra: { etichetta: "Compra", ordine: 0 },
+  valuta: { etichetta: "Da valutare", ordine: 1 },
+  attendi: { etichetta: "Attendi", ordine: 2 },
+  evita: { etichetta: "Evita per ora", ordine: 3 }
+};
+
+const SETTORI = {
+  "Financial Services": "Finanza",
+  "Consumer Cyclical": "Beni di consumo",
+  "Consumer Defensive": "Beni di prima necessità",
+  "Communication Services": "Telecomunicazioni",
+  Industrials: "Industria",
+  Utilities: "Servizi di pubblica utilità",
+  Technology: "Tecnologia",
+  Energy: "Energia",
+  Healthcare: "Salute",
+  "Basic Materials": "Materie prime",
+  "Real Estate": "Immobiliare"
+};
+
+// Importo per operazione e commissione: preferenze di questo browser
+const IMPOSTAZIONI_PROPOSTE = { importo: ["myfinance:importo", "1000"], commissione: ["myfinance:commissione", "2,95"] };
+
+function leggiImpostazione(nome) {
+  const [chiave, predefinito] = IMPOSTAZIONI_PROPOSTE[nome];
+  try {
+    return localStorage.getItem(chiave) || predefinito;
+  } catch {
+    return predefinito;
+  }
+}
+
+function salvaImpostazione(nome, valore) {
+  try {
+    localStorage.setItem(IMPOSTAZIONI_PROPOSTE[nome][0], valore);
+  } catch {
+    // Memoria del browser non disponibile: vale solo finché la pagina è aperta
+  }
+}
+
+function percentuale(valore, segno = true) {
+  if (valore === null || valore === undefined) return "—";
+  return `${segno && valore > 0 ? "+" : ""}${valore.toLocaleString("it-IT", { maximumFractionDigits: 1 })}%`;
+}
+
+function prezzoTitolo(t) {
+  if (t.prezzo === null) return "—";
+  const cifre = t.prezzo < 10 ? 3 : 2;
+  return `${t.prezzo.toLocaleString("it-IT", { minimumFractionDigits: cifre, maximumFractionDigits: cifre })} ${t.valuta === "EUR" ? "€" : t.valuta || ""}`;
+}
+
+// Il titolo nel registro investimenti: posizione aperta (con plusvalenza) o chiusa
+function titoloInPortafoglio(isin) {
+  const righe = state.investimenti.filter((r) => r.isin === isin);
+  if (!righe.length) return null;
+  const posizioni = [...new Set(righe.map((r) => r.posizione))];
+  const aperta = posizioni.find((p) => statoPosizione(p).stato !== "chiusa");
+  if (aperta !== undefined) {
+    const q = state.quotazioni.get(aperta);
+    const dettaglio = q?.quote ? `${formatQuantity(q.quote)} quote${q.plusvalenza !== null ? `, plusvalenza ${formatEuro(q.plusvalenza)}` : ""}` : "";
+    return { aperta: true, posizione: aperta, testo: `Già in portafoglio${dettaglio ? `: ${dettaglio}` : ""}.` };
+  }
+  const chiusura = statoPosizione(posizioni[posizioni.length - 1]).data;
+  return { aperta: false, posizione: posizioni[posizioni.length - 1], testo: `Posseduto in passato${chiusura ? ` (chiuso il ${formatDate(chiusura)})` : ""}.` };
+}
+
+// Titoli della watchlist dello stesso settore che hai già in portafoglio
+function stessoSettoreInPortafoglio(t) {
+  if (!t.settore) return [];
+  return state.watchlist.filter((w) => w.isin !== t.isin && w.settore === t.settore && titoloInPortafoglio(w.isin)?.aperta);
+}
+
+// Quante azioni compri con l'importo scelto e quanto pesa la commissione
+function calcoloAcquisto(t) {
+  if (!t.prezzo_eur) return "";
+  const importo = parseAmount(leggiImpostazione("importo")) || 1000;
+  const commissione = parseAmount(leggiImpostazione("commissione")) ?? 2.95;
+  const quote = Math.floor((importo - commissione) / t.prezzo_eur);
+  if (quote < 1) return `Con ${formatEuro(importo)} non basta per un'azione (${formatEuro(t.prezzo_eur)}).`;
+  const speso = quote * t.prezzo_eur;
+  const peso = (commissione / speso) * 100;
+  let testo = `Con ${formatEuro(importo)}: ${quote} ${quote === 1 ? "azione" : "azioni"} × ${formatEuro(t.prezzo_eur)} = ${formatEuro(speso)} + ${formatEuro(commissione)} di commissione (${percentuale(peso, false)}).`;
+  if (peso > 0.5) testo += ` Commissione alta: da ${formatEuro(Math.ceil(commissione / 0.005))} in su scende sotto lo 0,5%.`;
+  if (t.valuta && t.valuta !== "EUR") testo += ` Quotato in ${t.valuta}: il risultato dipende anche dal cambio.`;
+  return testo;
+}
+
+// Andamento dell'ultimo anno (punti settimanali) con la media a 200 giorni tratteggiata
+function sparkline(t) {
+  const valori = (t.andamento || []).filter((v) => v !== null);
+  if (valori.length < 2) return "";
+  const riferimenti = t.sma200 ? [...valori, t.sma200] : valori;
+  const min = Math.min(...riferimenti);
+  const max = Math.max(...riferimenti);
+  const y = (v) => (max === min ? 20 : 38 - ((v - min) / (max - min)) * 36);
+  const x = (i) => (i / (valori.length - 1)) * 200;
+  const linea = valori.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const colore = valori[valori.length - 1] >= valori[0] ? "var(--positive)" : "var(--negative)";
+  const media = t.sma200 ? `<line x1="0" x2="200" y1="${y(t.sma200).toFixed(1)}" y2="${y(t.sma200).toFixed(1)}" class="sparkline-media"><title>Media a 200 giorni</title></line>` : "";
+  return `<svg class="sparkline" viewBox="0 0 200 40" preserveAspectRatio="none" role="img" aria-label="Andamento dell'ultimo anno">
+    ${media}<polyline points="${linea}" fill="none" stroke="${colore}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function ordinaProposte(titoli) {
+  return [...titoli].sort((a, b) =>
+    (SEGNALI[a.segnale]?.ordine ?? 9) - (SEGNALI[b.segnale]?.ordine ?? 9) || (b.punteggio ?? 0) - (a.punteggio ?? 0));
+}
+
+// Proposta del giorno: il "Compra" migliore, 10 punti in meno per ogni titolo dello stesso settore già posseduto
+function propostaDelGiorno() {
+  const candidati = state.watchlist
+    .filter((t) => t.segnale === "compra" && !t.errore)
+    .map((t) => ({ t, punti: (t.punteggio ?? 0) - 10 * stessoSettoreInPortafoglio(t).length }))
+    .sort((a, b) => b.punti - a.punti);
+  return candidati.map((c) => c.t);
+}
+
+function schedaTitolo(t) {
+  const segnale = SEGNALI[t.segnale];
+  const settore = SETTORI[t.settore] || t.settore || "";
+  const portafoglio = titoloInPortafoglio(t.isin);
+  const stessoSettore = stessoSettoreInPortafoglio(t);
+  const contesto = [
+    portafoglio?.testo,
+    stessoSettore.length ? `Nello stesso settore hai già ${stessoSettore.map((w) => w.nome).join(", ")}.` : ""
+  ].filter(Boolean);
+  const metrica = (etichetta, valore, classe = "", titolo = "") =>
+    `<div ${titolo ? `title="${escapeHtml(titolo)}"` : ""}><dt>${etichetta}</dt><dd class="${classe}">${valore}</dd></div>`;
+  const colore = (v) => (v === null ? "" : v < 0 ? "negative" : "positive");
+  const corpo = t.errore
+    ? `<p class="errore-titolo">Analisi non riuscita: ${escapeHtml(t.errore)}</p>`
+    : !t.aggiornato_il
+      ? '<p class="hint">Non ancora analizzato: premi "Aggiorna analisi".</p>'
+      : `
+      ${sparkline(t)}
+      <dl class="metriche">
+        ${metrica("Prezzo", prezzoTitolo(t), "", t.data_prezzo ? `Chiusura del ${formatDate(t.data_prezzo)}` : "")}
+        ${metrica("1 mese", percentuale(t.var_1m), colore(t.var_1m))}
+        ${metrica("1 anno", percentuale(t.var_1a), colore(t.var_1a))}
+        ${metrica("Dal massimo", t.sconto === null ? "—" : percentuale(-t.sconto), t.sconto > 0 ? "negative" : "", "Distanza dal massimo delle ultime 52 settimane")}
+        ${metrica("RSI", t.rsi === null ? "—" : Math.round(t.rsi), t.rsi >= 70 || t.rsi <= 30 ? "evidenza" : "", "Forza relativa a 14 giorni: sopra 70 ipercomprato, sotto 30 ipervenduto")}
+        ${metrica("Dividendi", t.rendimento_div ? percentuale(t.rendimento_div, false) : "—", "", "Dividendi dell'ultimo anno rispetto al prezzo")}
+      </dl>
+      <ul class="motivi">${(t.motivi || []).map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul>
+      ${contesto.length ? `<p class="contesto">${escapeHtml(contesto.join(" "))}</p>` : ""}
+      ${t.segnale === "compra" || t.segnale === "valuta" ? `<p class="acquisto">${escapeHtml(calcoloAcquisto(t))}</p>` : ""}`;
+  return `
+    <article class="titolo-card segnale-${t.segnale || "nessuno"}" data-isin="${escapeHtml(t.isin)}">
+      <header>
+        <div>
+          <h3>${escapeHtml(t.nome || t.isin)}</h3>
+          <span class="hint">${escapeHtml([t.simbolo, settore].filter(Boolean).join(" · "))}</span>
+        </div>
+        ${segnale ? `<span class="badge-segnale badge-${t.segnale}" title="Punteggio ${t.punteggio}/100">${segnale.etichetta}</span>` : ""}
+      </header>
+      ${corpo}
+      <footer>
+        ${t.aggiornato_il && !t.errore ? `<button class="link-button" type="button" data-azione="grafico">${state.graficoProposta === t.isin ? "Chiudi grafico" : "Grafico"}</button>` : ""}
+        <button class="link-button danger" type="button" data-azione="rimuovi">Rimuovi</button>
+        ${t.punteggio !== null && t.punteggio !== undefined ? `<span class="hint">Punteggio ${t.punteggio}/100</span>` : ""}
+      </footer>
+      ${state.graficoProposta === t.isin ? '<div class="grafico-proposta"><canvas></canvas></div>' : ""}
+    </article>`;
+}
+
+function renderProposte() {
+  if (!elements.proposteLista) return;
+  if (document.activeElement !== elements.proposteImporto) elements.proposteImporto.value = leggiImpostazione("importo");
+  if (document.activeElement !== elements.proposteCommissione) elements.proposteCommissione.value = leggiImpostazione("commissione");
+
+  const date = state.watchlist.map((t) => t.data_prezzo).filter(Boolean).sort();
+  const conteggi = Object.entries(SEGNALI)
+    .map(([chiave, s]) => [s.etichetta, state.watchlist.filter((t) => t.segnale === chiave).length])
+    .filter(([, n]) => n)
+    .map(([etichetta, n]) => `${n} ${etichetta.toLowerCase()}`);
+  elements.proposteInfo.textContent = !state.watchlist.length ? ""
+    : `${state.watchlist.length} titoli${date.length ? ` · prezzi al ${formatDate(date[date.length - 1])}` : ""}${conteggi.length ? ` · ${conteggi.join(", ")}` : ""}`;
+
+  // Proposta del giorno
+  const proposte = propostaDelGiorno();
+  if (!state.watchlist.length) {
+    elements.propostaGiorno.innerHTML = '<p class="hint">La watchlist è vuota (o la tabella non esiste ancora): aggiungi un ISIN qui sotto.</p>';
+  } else if (!state.watchlist.some((t) => t.aggiornato_il)) {
+    elements.propostaGiorno.innerHTML = '<p class="hint">Nessuna analisi ancora: premi "Aggiorna analisi".</p>';
+  } else if (!proposte.length) {
+    const daValutare = state.watchlist.filter((t) => t.segnale === "valuta").map((t) => t.nome);
+    elements.propostaGiorno.innerHTML = `
+      <p class="proposta-titolo">Oggi nessuna proposta di acquisto</p>
+      <p>Nessun titolo della watchlist è in un trend positivo con un ritracciamento: meglio aspettare.${daValutare.length ? ` Da valutare, con più rischio: ${escapeHtml(daValutare.join(", "))}.` : ""}</p>`;
+  } else {
+    const [migliore, ...altre] = proposte;
+    elements.propostaGiorno.innerHTML = `
+      <p class="proposta-titolo">Proposta del giorno: <strong>${escapeHtml(migliore.nome)}</strong> <span class="hint">${escapeHtml(migliore.simbolo || "")}</span></p>
+      <ul class="motivi">${(migliore.motivi || []).map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul>
+      <p class="acquisto">${escapeHtml(calcoloAcquisto(migliore))}</p>
+      ${altre.length ? `<p class="hint">Anche in zona d'acquisto: ${escapeHtml(altre.map((t) => t.nome).join(", "))}.</p>` : ""}`;
+  }
+
+  elements.proposteLista.innerHTML = ordinaProposte(state.watchlist).map(schedaTitolo).join("");
+  if (state.graficoProposta) disegnaGraficoProposta(state.graficoProposta);
+}
+
+// Grafico di un titolo: ultimo anno di prezzi con le medie a 50 e 200 giorni (storico caricato ora)
+async function disegnaGraficoProposta(isin) {
+  const canvas = elements.proposteLista.querySelector(`.titolo-card[data-isin="${CSS.escape(isin)}"] canvas`);
+  if (!canvas) return;
+  const { data, error } = await state.supabase.from("watchlist").select("storico").eq("isin", isin).single();
+  if (error || !data?.storico?.length) return showFeedback("Storico non disponibile: premi \"Aggiorna analisi\".", "error");
+  const chiusure = data.storico.map((p) => Number(p[1]));
+  const mediaMobile = (n) => chiusure.map((_, i) => (i + 1 < n ? null : chiusure.slice(i + 1 - n, i + 1).reduce((s, v) => s + v, 0) / n));
+  const inizio = Math.max(0, chiusure.length - 252);
+  const taglia = (serie) => serie.slice(inizio);
+  const etichette = taglia(data.storico.map((p) => formatDate(p[0])));
+  drawChart("proposta", canvas, {
+    type: "line",
+    data: {
+      labels: etichette,
+      datasets: [
+        { label: "Prezzo", data: taglia(chiusure), borderColor: "#3f6d56", backgroundColor: "#3f6d56", borderWidth: 1.6 },
+        { label: "Media 50 giorni", data: taglia(mediaMobile(50)), borderColor: "#d08c2f", backgroundColor: "#d08c2f", borderWidth: 1.2 },
+        { label: "Media 200 giorni", data: taglia(mediaMobile(200)), borderColor: "#8a8a8a", backgroundColor: "#8a8a8a", borderWidth: 1.2, borderDash: [5, 4] }
+      ]
+    },
+    options: {
+      maintainAspectRatio: false,
+      elements: { point: { radius: 0 } },
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { position: "bottom" } },
+      scales: { x: { ticks: { maxTicksLimit: 6 } } }
+    }
+  });
+}
+
+async function aggiornaProposte() {
+  elements.aggiornaProposte.disabled = true;
+  elements.aggiornaProposte.textContent = "Analizzo...";
+  const { data, error } = await state.supabase.functions.invoke("aggiorna-quotazioni", { body: { azione: "watchlist" } });
+  elements.aggiornaProposte.disabled = false;
+  elements.aggiornaProposte.textContent = "Aggiorna analisi";
+  if (error) return showFeedback(`Analisi non aggiornata: ${await motivoErroreFunzione(error)}`, "error");
+  const errori = Array.isArray(data) ? data.filter((t) => t.errore) : [];
+  showFeedback(errori.length
+    ? `Analisi aggiornata; non riuscita per ${errori.map((t) => `${t.isin} (${t.errore})`).join(", ")}.`
+    : `Analisi aggiornata per ${Array.isArray(data) ? data.length : 0} titoli.`, errori.length ? "error" : "success");
+  await reload();
+}
+
+async function aggiungiAllaWatchlist(event) {
+  event.preventDefault();
+  const isin = elements.watchlistIsin.value.trim().toUpperCase();
+  if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(isin)) return showFeedback("ISIN non valido: 2 lettere, 9 caratteri e una cifra (es. IT0003132476).", "error");
+  if (state.watchlist.some((t) => t.isin === isin)) return showFeedback("Questo ISIN è già nella watchlist.", "error");
+  const { error } = await state.supabase.from("watchlist").insert({ isin });
+  if (error) return showFeedback(`Non aggiunto: ${error.message}`, "error");
+  elements.watchlistIsin.value = "";
+  showFeedback(`${isin} aggiunto: lo analizzo...`);
+  await aggiornaProposte();
+}
+
+async function rimuoviDallaWatchlist(isin) {
+  const titolo = state.watchlist.find((t) => t.isin === isin);
+  if (!confirm(`Togliere ${titolo?.nome || isin} dalla watchlist?`)) return;
+  const { error } = await state.supabase.from("watchlist").delete().eq("isin", isin);
+  if (error) return showFeedback(`Non rimosso: ${error.message}`, "error");
+  if (state.graficoProposta === isin) state.graficoProposta = null;
+  showFeedback(`${titolo?.nome || isin} tolto dalla watchlist.`);
   await reload();
 }
 
@@ -2059,6 +2363,7 @@ function showSection(view) {
   elements.viewDashboard.classList.toggle("hidden", view !== "dashboard");
   elements.viewInvestimenti.classList.toggle("hidden", view !== "investimenti");
   elements.viewDashboardInvestimenti.classList.toggle("hidden", view !== "dashboard-investimenti");
+  elements.viewProposte.classList.toggle("hidden", view !== "proposte");
 }
 
 function showView(view) {
@@ -2072,6 +2377,7 @@ function showView(view) {
   // I grafici disegnati mentre la sezione era nascosta vanno ridisegnati
   if (view === "dashboard") renderDashboard();
   if (view === "investimenti" || view === "dashboard-investimenti") renderInvestimenti();
+  if (view === "proposte") renderProposte();
   if (view === "movimenti" && !state.lista.finita) watchListaFine();
 }
 
@@ -2080,6 +2386,7 @@ function renderAll() {
   renderFilters();
   renderDashboard();
   renderInvestimenti();
+  renderProposte();
 }
 
 // Click su un importo della dashboard: apre i movimenti filtrati per anno, mese e categoria
@@ -2190,6 +2497,26 @@ function bindEvents() {
   });
 
   elements.invNuova.addEventListener("click", () => startEditInvestimento("nuova"));
+  elements.aggiornaProposte.addEventListener("click", aggiornaProposte);
+  elements.watchlistForm.addEventListener("submit", aggiungiAllaWatchlist);
+  for (const [nome, campo] of [["importo", elements.proposteImporto], ["commissione", elements.proposteCommissione]]) {
+    campo.addEventListener("change", () => {
+      const valore = parseAmount(campo.value);
+      if (valore === null || valore < 0) return showFeedback("Valore non valido.", "error");
+      salvaImpostazione(nome, campo.value.trim());
+      renderProposte();
+    });
+  }
+  elements.proposteLista.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-azione]");
+    if (!button) return;
+    const isin = button.closest(".titolo-card").dataset.isin;
+    if (button.dataset.azione === "rimuovi") rimuoviDallaWatchlist(isin);
+    if (button.dataset.azione === "grafico") {
+      state.graficoProposta = state.graficoProposta === isin ? null : isin;
+      renderProposte();
+    }
+  });
   for (const [nome, campo] of Object.entries(elements.invFiltri)) {
     campo.addEventListener(nome === "testo" ? "input" : "change", () => {
       state.filtriInv[nome] = campo.value;

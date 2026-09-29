@@ -778,6 +778,207 @@ tr.editing .check-field {
   }
 }
 
+/* Proposte: proposta del giorno e schede dei titoli della watchlist */
+
+.impostazione-input {
+  width: 80px;
+  text-align: right;
+}
+
+.proposta-giorno {
+  margin: 1rem 0;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.proposta-giorno p {
+  margin: 0.3rem 0;
+}
+
+.proposta-titolo {
+  font-size: 1.1rem;
+}
+
+.regole {
+  margin: 0 0 1rem;
+  color: var(--ink-soft);
+}
+
+.regole summary {
+  cursor: pointer;
+  color: var(--accent-deep);
+}
+
+.proposte-lista {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0.8rem;
+}
+
+.titolo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.titolo-card.segnale-compra {
+  border-top-color: var(--accent);
+}
+
+.titolo-card.segnale-valuta {
+  border-top-color: #d08c2f;
+}
+
+.titolo-card.segnale-evita {
+  border-top-color: var(--negative);
+}
+
+.titolo-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.titolo-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.titolo-card footer {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-top: auto;
+}
+
+.titolo-card footer .hint {
+  margin-left: auto;
+}
+
+.badge-segnale {
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-compra {
+  background: var(--accent);
+  color: #fff;
+}
+
+.badge-valuta {
+  background: #f3dfbf;
+  color: #7a4d12;
+}
+
+.badge-attendi {
+  background: rgba(31, 42, 36, 0.08);
+  color: var(--ink-soft);
+}
+
+.badge-evita {
+  background: var(--over);
+  color: var(--negative);
+}
+
+.sparkline {
+  width: 100%;
+  height: 44px;
+}
+
+.sparkline-media {
+  stroke: #8a8a8a;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.metriche {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.3rem 0.6rem;
+  margin: 0;
+}
+
+.metriche dt {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+
+.metriche dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.metriche dd.evidenza {
+  font-weight: 700;
+}
+
+.motivi {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.motivi li + li {
+  margin-top: 0.2rem;
+}
+
+.contesto,
+.acquisto {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.acquisto {
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: rgba(63, 109, 86, 0.08);
+  color: var(--ink);
+}
+
+.errore-titolo {
+  margin: 0;
+  color: var(--negative);
+}
+
+.grafico-proposta {
+  height: 240px;
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-deep);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-button.danger {
+  color: var(--negative);
+}
+
+.watchlist-form {
+  margin-top: 1rem;
+}
+
+.watchlist-form input {
+  flex: 0 1 300px;
+  min-width: 0;
+}
+
 /* Telefono: la tabella movimenti diventa una lista di schede */
 
 @media (max-width: 720px) {

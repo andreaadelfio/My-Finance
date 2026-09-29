@@ -138,6 +138,20 @@ Per pubblicarla (una volta sola):
    pubblica, che non è un JWT).
 4. Facoltativo: aggiornamento automatico ogni sera, vedi il fondo di `schema.sql`.
 
+## Proposte (watchlist)
+
+Investimenti → Proposte mostra i titoli della tabella `watchlist` (all'inizio quelli di
+ISIN Monitor) con un segnale ricavato da due anni di prezzi giornalieri: Compra
+(ritracciamento in un trend al rialzo), Da valutare (ipervenduto senza trend), Attendi,
+Evita per ora (trend negativo). Le regole sono spiegate nella pagina e nel codice della
+funzione. La proposta del giorno è il "Compra" migliore, penalizzato se hai già titoli
+dello stesso settore; per ogni proposta il sito calcola quante azioni compri con l'importo
+scelto e quanto pesa la commissione. Gli ISIN si aggiungono e tolgono dalla pagina.
+
+L'analisi la fa la stessa Edge Function dei prezzi con `{"azione": "watchlist"}` (bottone
+"Aggiorna analisi"); il pg_cron serale, senza azione, aggiorna prezzi e proposte insieme.
+Per attivarla: eseguire `supabase/watchlist.sql` nell'SQL Editor e ripubblicare la funzione.
+
 ## Avvio locale
 
 ```bash
