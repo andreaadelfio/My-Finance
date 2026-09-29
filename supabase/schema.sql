@@ -95,6 +95,33 @@ begin
 end;
 $$;
 
+-- Quotazioni delle posizioni aperte (esclusi i BTP), scritte dalla Edge Function
+-- "aggiorna-quotazioni": prezzo di oggi da Yahoo Finance, quote, costo, valore se si
+-- vendesse domani e plusvalenza. quote_stimate = quantità mancante negli acquisti,
+-- ricavata dal prezzo del giorno d'acquisto (da controllare: sul sito è in giallo).
+create table if not exists public.quotazioni (
+  posizione integer primary key,
+  isin text not null,
+  simbolo text,
+  prezzo numeric(14, 4),
+  data_prezzo date,
+  quote numeric(14, 4),
+  quote_stimate boolean not null default false,
+  costo numeric(14, 2),
+  valore numeric(14, 2),
+  plusvalenza numeric(14, 2),
+  errore text,
+  aggiornato_il timestamptz not null default now()
+);
+
+-- Non più usate: l'ABP è in investimenti e il book value si calcola (quote × ABP)
+alter table public.quotazioni add column if not exists abp numeric(14, 4);
+alter table public.quotazioni add column if not exists book_value numeric(14, 2);
+
+-- ABP (prezzo medio di carico) copiato dal conto dopo l'operazione: per la posizione vale
+-- quello dell'operazione più recente che ce l'ha (usato da "aggiorna-quotazioni")
+alter table public.investimenti add column if not exists abp numeric(14, 6);
+
 -- Mappatura "categoria della banca -> mia categoria", usata quando si importano
 -- gli estratti conto (dal sito con "+ Excel" o con import_excel.py)
 create table if not exists public.mappatura_categorie (
@@ -353,7 +380,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['categorie', 'movimenti', 'budget', 'saldi', 'riepiloghi_annuali', 'investimenti', 'mappatura_categorie'] loop
+  foreach t in array array['categorie', 'movimenti', 'budget', 'saldi', 'riepiloghi_annuali', 'investimenti', 'mappatura_categorie', 'quotazioni'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "accesso pubblico" on public.%I', t);
     execute format(
@@ -425,3 +452,18 @@ alter role authenticator set pgrst.db_aggregates_enabled = 'true';
 -- Fa vedere subito le nuove tabelle e impostazioni all'API di Supabase
 notify pgrst, 'reload schema';
 notify pgrst, 'reload config';
+
+-- Aggiornamento automatico delle quotazioni dal lunedì al venerdì alle 20:00 UTC
+-- (22 in estate, 21 in inverno), dopo la chiusura delle borse (facoltativo).
+-- Richiede le estensioni pg_cron e pg_net (Database -> Extensions) e la Edge Function
+-- "aggiorna-quotazioni" pubblicata. La funzione impiega circa 20 secondi: pg_net di
+-- default aspetta 5 secondi, da qui timeout_milliseconds. Per toglierlo:
+-- select cron.unschedule('aggiorna-quotazioni');
+-- select cron.schedule('aggiorna-quotazioni', '0 20 * * 1-5', $$
+--   select net.http_post(
+--     url := 'https://fvhzmkvqizfnbgxexdgu.supabase.co/functions/v1/aggiorna-quotazioni',
+--     headers := '{"Content-Type": "application/json"}'::jsonb,
+--     body := '{}'::jsonb,
+--     timeout_milliseconds := 60000
+--   );
+-- $$);

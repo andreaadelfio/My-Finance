@@ -416,6 +416,41 @@ details summary {
   color: var(--ink-soft);
 }
 
+/* Stato delle posizioni: le chiuse in grigio */
+.stato {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.stato-aperta {
+  background: #d6ecd9;
+  color: var(--accent-deep);
+}
+
+.stato-scadenza {
+  background: #e3e8f4;
+  color: #34507a;
+}
+
+.stato-chiusa {
+  background: rgba(31, 42, 36, 0.08);
+  color: var(--ink-soft);
+}
+
+.summary-table tr.chiusa th,
+.summary-table tr.chiusa td {
+  color: var(--ink-soft);
+}
+
+/* Posizioni con quote stimate o prezzo non trovato: da controllare */
+.summary-table tr.da-controllare td,
+.summary-table tr.da-controllare th {
+  background: #fff1b8;
+}
+
 .summary-table tr.future td {
   color: var(--ink-soft);
   font-style: italic;
@@ -533,6 +568,39 @@ thead th {
   text-align: right;
 }
 
+.riga-input.num-input {
+  max-width: 110px;
+  text-align: right;
+}
+
+/* Riga in modifica del registro investimenti: in ogni cella un campo sotto l'altro */
+#operazioni-body tr.editing td {
+  white-space: normal;
+}
+
+#operazioni-body tr.editing .riga-input {
+  display: block;
+  width: 100%;
+  max-width: none;
+}
+
+#operazioni-body tr.editing select.riga-input {
+  min-width: 125px;
+}
+
+#operazioni-body tr.editing .num-input {
+  min-width: 95px;
+}
+
+#operazioni-body tr.editing [data-campo="posizione"] {
+  min-width: 60px;
+}
+
+tr.editing .check-field {
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
 .dettagli-input {
   margin-top: 0.25rem;
   font-size: 0.8rem;
@@ -625,6 +693,48 @@ thead th {
   font-weight: 700;
 }
 
+/* Tabella andamento: Entrate e Uscite con le categorie apribili sotto */
+
+.summary-table .group-row th,
+.summary-table .group-row td {
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  font-weight: 700;
+}
+
+.group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.group-toggle::before {
+  content: "▸";
+  display: inline-block;
+  width: 0.8em;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}
+
+.group-toggle[aria-expanded="true"]::before {
+  transform: rotate(90deg);
+}
+
+.summary-table .cat-row th:first-child {
+  padding-left: 1.5rem;
+  font-weight: 400;
+}
+
+.summary-table .risparmio-row th,
+.summary-table .risparmio-row td {
+  border-top: 2px solid var(--line);
+}
+
 .summary-table td.over {
   background: var(--over);
   color: var(--negative);
@@ -640,6 +750,20 @@ thead th {
 
 .zero {
   color: #b5b9b3;
+}
+
+.broker-input {
+  width: 95px;
+  padding: 0.2rem 0.4rem;
+  text-align: right;
+}
+
+.summary-table td.calcolato {
+  color: #9aa19b;
+}
+
+.broker-input::placeholder {
+  color: #9aa19b;
 }
 
 .budget-input {

@@ -4,9 +4,9 @@ SITE_DIR ?= .
 
 all: git
 
-# Su Windows i target passano a make.ps1 (stessi comandi, senza bash/xdg-open/pkill)
+# Su Windows i target passano a make-windows.ps1 (stessi comandi, senza bash/xdg-open/pkill)
 ifeq ($(OS),Windows_NT)
-PS = powershell -NoProfile -ExecutionPolicy Bypass -File make.ps1
+PS = powershell -NoProfile -ExecutionPolicy Bypass -File make-windows.ps1
 
 git dev stop:
 	@$(PS) $@ -Port $(PORT) -HostName $(HOST) -SiteDir "$(SITE_DIR)"

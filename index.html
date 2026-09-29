@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=12">
+    <link rel="stylesheet" href="./assets/styles.css?v=19">
   </head>
   <body>
     <div class="page-shell">
@@ -113,25 +113,24 @@
         </div>
 
         <h2><span class="titolo-periodo">Andamento mensile</span> <span class="unit">(€)</span></h2>
+        <p class="hint">Clicca Entrate o Uscite per aprire le categorie, un importo per vedere i movimenti. <span id="budget-hint"></span></p>
         <div class="table-wrap">
           <table id="andamento-table" class="summary-table"></table>
         </div>
         <p id="andamento-hint" class="hint hidden">Gli anni senza movimenti (2021, 2022) vengono dal foglio Pre 2023 (nel grafico: media mensile sui mesi lavorati, tratteggiata):
           mesi lavorati, entrate e uscite si modificano nella tabella <code>riepiloghi_annuali</code> di Supabase.</p>
-
-        <h2><span id="titolo-categorie"></span> <span class="unit">(€)</span></h2>
-        <p class="hint"><span id="budget-hint"></span> Clicca un importo per vedere i movimenti.</p>
-        <div class="table-wrap">
-          <table id="categorie-table" class="summary-table"></table>
-        </div>
       </section>
 
       <!-- DASHBOARD INVESTIMENTI (come "Investimenti Dashboard" dell'Excel) -->
       <section id="view-dashboard-investimenti" class="panel hidden">
-        <label class="check-field">
-          <input id="i-future" type="checkbox" checked>
-          Includi le operazioni future previste (cedole e rimborsi già in calendario)
-        </label>
+        <div class="toolbar">
+          <label class="check-field">
+            <input id="i-future" type="checkbox" checked>
+            Includi le operazioni future previste (cedole e rimborsi già in calendario)
+          </label>
+          <button class="secondary-button aggiorna-prezzi" type="button" title="Prende da Yahoo Finance i prezzi di oggi e ricalcola la plusvalenza se vendessi domani (esclusi i BTP)">Aggiorna prezzi</button>
+          <span id="quotazioni-info" class="hint"></span>
+        </div>
 
         <p id="investimenti-sintesi" class="sintesi"></p>
 
@@ -146,7 +145,14 @@
           </div>
         </div>
 
+        <h2>Posizioni aperte a prezzo di mercato <span class="unit">(€)</span></h2>
+        <p class="hint">Se vendessi domani (esclusi i BTP). Quantità e ABP si inseriscono con le operazioni nel registro Investimenti: book value = quote × ABP (senza ABP, la somma degli acquisti registrati).</p>
+        <div class="table-wrap">
+          <table id="mercato-table" class="summary-table"></table>
+        </div>
+
         <h2>Posizioni <span class="unit">(€)</span></h2>
+        <p class="hint">Clicca un nome o un tipo per vedere le sue operazioni.</p>
         <div class="table-wrap">
           <table id="posizioni-table" class="summary-table"></table>
         </div>
@@ -160,32 +166,23 @@
 
       <!-- INVESTIMENTI: registro delle operazioni -->
       <section id="view-investimenti" class="panel hidden">
-        <form id="investimento-form" class="entry-form">
-          <input id="i-data" type="date" required aria-label="Data">
-          <label class="check-field" title="Valore attuale di una posizione aperta, come se la chiudessi domani: la data resta sempre domani (come =OGGI()+1 nell'Excel)">
-            <input id="i-domani" type="checkbox"> Sempre domani
-          </label>
-          <input id="i-nome" type="text" list="investimenti-list" placeholder="Nome (es. BTP...)" required autocomplete="off">
-          <datalist id="investimenti-list"></datalist>
-          <input id="i-posizione" type="number" min="0" step="1" placeholder="ID" title="ID posizione: stesso ID per le operazioni dello stesso investimento" required>
-          <input id="i-isin" type="text" placeholder="ISIN" autocomplete="off">
-          <input id="i-prodotto" type="text" placeholder="Prodotto" autocomplete="off">
-          <input id="i-tipo" type="text" list="tipi-list" placeholder="Tipo" autocomplete="off">
-          <datalist id="tipi-list"></datalist>
-          <select id="i-operazione" aria-label="Operazione">
-            <option>Investimento</option>
-            <option>Rimborso</option>
-            <option>Cedola</option>
-            <option>Dividendi</option>
-          </select>
-          <input id="i-quantita" type="text" inputmode="decimal" placeholder="Quantità" autocomplete="off">
-          <input id="i-importo" type="text" inputmode="decimal" placeholder="Importo €" required autocomplete="off">
-          <input id="i-commissioni" type="text" inputmode="decimal" placeholder="Commissioni" autocomplete="off">
-          <input id="i-tassa" type="text" inputmode="decimal" placeholder="Tassa" autocomplete="off">
-          <input id="i-note" type="text" placeholder="Note" autocomplete="off">
-          <button id="i-submit" class="primary-button" type="submit">Aggiungi</button>
-          <button id="i-cancel" class="secondary-button hidden" type="button">Annulla</button>
-        </form>
+        <div class="toolbar">
+          <button id="i-nuova" class="primary-button" type="button" title="Aggiunge in cima alla tabella una riga da compilare (Invio salva, Esc annulla)">+ Nuova operazione</button>
+          <button class="secondary-button aggiorna-prezzi" type="button" title="Prende da Yahoo Finance i prezzi di oggi e ricalcola la plusvalenza se vendessi domani (esclusi i BTP)">Aggiorna prezzi</button>
+        </div>
+        <datalist id="investimenti-list"></datalist>
+        <datalist id="tipi-list"></datalist>
+
+        <div class="filters">
+          <select id="inv-filtro-posizione" aria-label="Posizione"></select>
+          <select id="inv-filtro-stato" aria-label="Stato"></select>
+          <select id="inv-filtro-operazione" aria-label="Operazione"></select>
+          <select id="inv-filtro-tipo" aria-label="Tipo"></select>
+          <select id="inv-filtro-anno" aria-label="Anno"></select>
+          <input id="inv-filtro-testo" type="search" placeholder="Cerca nome, ISIN, note..." autocomplete="off">
+          <button id="inv-filtro-reset" class="secondary-button" type="button" title="Mostra tutte le operazioni">Svuota filtri</button>
+          <p id="inv-totali" class="totali"></p>
+        </div>
 
         <h2>Operazioni</h2>
         <div class="table-wrap">
@@ -198,6 +195,7 @@
                 <th><button class="sort-button" type="button" data-sort-inv="tipo">Tipo<span class="sort-indicator" aria-hidden="true"></span></button></th>
                 <th><button class="sort-button" type="button" data-sort-inv="operazione">Operazione<span class="sort-indicator" aria-hidden="true"></span></button></th>
                 <th class="num"><button class="sort-button" type="button" data-sort-inv="quantita">Quantità<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th class="num"><button class="sort-button" type="button" data-sort-inv="abp" title="Prezzo medio di carico dopo l'operazione">ABP<span class="sort-indicator" aria-hidden="true"></span></button></th>
                 <th class="num"><button class="sort-button" type="button" data-sort-inv="importo">Importo<span class="sort-indicator" aria-hidden="true"></span></button></th>
                 <th><button class="sort-button" type="button" data-sort-inv="note">Note<span class="sort-indicator" aria-hidden="true"></span></button></th>
                 <th></th>
@@ -212,6 +210,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=12"></script>
+    <script type="module" src="./assets/app.js?v=28"></script>
   </body>
 </html>

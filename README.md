@@ -120,12 +120,32 @@ nuova, ha la sua riga di `budget` nell'anno in corso (a 0 se non impostata), da 
 fanno eccezione le categorie della banca già mappate su un'altra. Per il sito un budget a 0
 vale come "nessun budget" (giallo): per togliere il budget a una categoria mettilo a 0.
 
+## Prezzi delle posizioni aperte
+
+La Edge Function `supabase/functions/aggiorna-quotazioni` prende da Yahoo Finance il prezzo
+di oggi di ogni posizione aperta con ISIN (esclusi i BTP, tenuti fino a scadenza) e aggiorna
+le righe "domani": Rimborso = costo d'acquisto, Cedola = plusvalenza se vendessi domani.
+Se gli acquisti non hanno la quantità, le quote si stimano dal prezzo del giorno d'acquisto
+e la posizione è in giallo. Si lancia con "Aggiorna prezzi" nella Dashboard investimenti.
+
+Per pubblicarla (una volta sola):
+
+1. SQL Editor: eseguire solo il `create table ... quotazioni` di `supabase/schema.sql` e
+   le sue regole di accesso (non tutto lo schema: cancellerebbe le categorie senza movimenti).
+2. Edge Functions → Deploy a new function → Via Editor: nome `aggiorna-quotazioni`,
+   incollare `index.ts` e pubblicare.
+3. Nelle impostazioni della funzione disattivare "Verify JWT" (il sito usa la chiave
+   pubblica, che non è un JWT).
+4. Facoltativo: aggiornamento automatico ogni sera, vedi il fondo di `schema.sql`.
+
 ## Avvio locale
 
 ```bash
 make dev    # http://127.0.0.1:8002/index.html
 make stop
 ```
+
+Su Windows senza make: `.\make dev` e `.\make stop` (PowerShell) oppure `make dev` (cmd).
 
 ## Pubblicazione
 

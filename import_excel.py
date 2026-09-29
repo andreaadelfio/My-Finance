@@ -337,9 +337,12 @@ def main():
         movimento_key(r["data"], r["importo"], r["operazione"], r["dettagli"])
         for r in db.select_all("movimenti", "data,importo,operazione,dettagli")
     )
-    # Le operazioni "domani" si confrontano senza la data (che cambia ogni giorno)
+    # Le operazioni "domani" si confrontano senza la data (che cambia ogni giorno) e senza
+    # l'importo (lo aggiorna la Edge Function "aggiorna-quotazioni")
     def chiave_investimento(r):
-        return investimento_key(r["posizione"], "domani" if r["domani"] else r["data"], r["operazione"], r["importo"])
+        if r["domani"]:
+            return (int(r["posizione"]), "domani", r["operazione"])
+        return investimento_key(r["posizione"], r["data"], r["operazione"], r["importo"])
 
     investimenti_presenti = Counter(
         chiave_investimento(r) for r in db.select_all("investimenti", "posizione,data,domani,operazione,importo")
