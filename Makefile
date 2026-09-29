@@ -4,6 +4,15 @@ SITE_DIR ?= .
 
 all: git
 
+# Su Windows i target passano a make.ps1 (stessi comandi, senza bash/xdg-open/pkill)
+ifeq ($(OS),Windows_NT)
+PS = powershell -NoProfile -ExecutionPolicy Bypass -File make.ps1
+
+git dev stop:
+	@$(PS) $@ -Port $(PORT) -HostName $(HOST) -SiteDir "$(SITE_DIR)"
+
+else
+
 git:
 	git add --all
 	git commit -m "Updated website at $(shell date)"
@@ -26,5 +35,7 @@ stop:
 	else \
 		echo "Nessun server trovato sulla porta $(PORT)"; \
 	fi
+
+endif
 
 .PHONY: all git dev stop

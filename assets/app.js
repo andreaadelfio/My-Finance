@@ -59,7 +59,7 @@ const elements = {
   mappaturaButton: document.querySelector("#mappatura-button"),
   mappaturaPanel: document.querySelector("#mappatura-panel"),
   listaFine: document.querySelector("#lista-fine"),
-  saldoInput: document.querySelector("#saldo-input"),
+  saldoValore: document.querySelector("#saldo-valore"),
   budgetHint: document.querySelector("#budget-hint"),
   andamentoTable: document.querySelector("#andamento-table"),
   categorieTable: document.querySelector("#categorie-table"),
@@ -1123,7 +1123,7 @@ function renderAndamento() {
       <tr>
         <th>Saldo conto${tuttiGliAnni() ? " (fine anno)" : ""}</th>
         ${saldi.map((v) => (v === null ? '<td class="num"><span class="zero">—</span></td>' : cell(v))).join("")}
-        <td class="num" colspan="2">${nessunSaldo ? '<span class="zero">imposta il saldo iniziale</span>' : ""}</td>
+        <td class="num" colspan="2">${nessunSaldo ? '<span class="zero">saldo iniziale mancante: rilancia l’import</span>' : ""}</td>
       </tr>
       ${storico}
     </tbody>`;
@@ -1209,7 +1209,7 @@ function renderDashboard() {
       : "Budget mensili: le celle rosse lo superano.";
   elements.saldoField.classList.toggle("hidden", tuttiGliAnni());
   const saldo = state.saldi.get(state.year);
-  elements.saldoInput.value = saldo === undefined ? "" : String(saldo).replace(".", ",");
+  elements.saldoValore.textContent = saldo === undefined ? "—" : formatEuro(saldo);
   elements.titoloPeriodo.textContent = tuttiGliAnni() ? "Andamento annuale" : "Andamento mensile";
   renderAndamento();
   renderCategoryTable(elements.categorieTable, state.tipoDashboard);
@@ -1450,18 +1450,6 @@ async function saveBudget(input) {
     if (error) return showFeedback(`Budget non salvato: ${error.message}`, "error");
   }
   showFeedback(`Budget ${state.year} salvato.`);
-  await reload();
-}
-
-async function saveSaldo() {
-  const text = elements.saldoInput.value.trim();
-  const saldo = parseAmount(text);
-  if (text && saldo === null) return showFeedback("Saldo non valido.", "error");
-  const { error } = text
-    ? await state.supabase.from("saldi").upsert({ anno: state.year, saldo_iniziale: saldo })
-    : await state.supabase.from("saldi").delete().eq("anno", state.year);
-  if (error) return showFeedback(`Saldo non salvato: ${error.message}`, "error");
-  showFeedback("Saldo iniziale salvato.");
   await reload();
 }
 
@@ -1813,12 +1801,40 @@ async function deleteInvestimento(id) {
 // Navigazione ed eventi
 // ---------------------------------------------------------------------------
 
-function showView(view) {
-  elements.tabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
+// Ogni gruppo ricorda la voce scelta per ultima (.selected); il gruppo della vista aperta è .current
+function renderTabs(view) {
+  document.querySelectorAll(".switch").forEach((sw) => {
+    const voci = [...sw.querySelectorAll(".tab")];
+    const scelta = voci.find((tab) => tab.dataset.view === view);
+    if (scelta) voci.forEach((tab) => tab.classList.toggle("selected", tab === scelta));
+    voci.forEach((tab) => {
+      const attivo = tab === scelta;
+      tab.classList.toggle("active", attivo);
+      tab.setAttribute("aria-selected", String(attivo));
+      // Con Tab si entra in ogni interruttore sulla voce scelta, poi si usano le frecce
+      tab.tabIndex = tab.classList.contains("selected") ? 0 : -1;
+    });
+    sw.style.setProperty("--n", voci.length);
+    sw.style.setProperty("--i", Math.max(0, voci.findIndex((tab) => tab.classList.contains("selected"))));
+    sw.closest(".switch-group").classList.toggle("current", Boolean(scelta));
+  });
+}
+
+function showSection(view) {
   elements.viewMovimenti.classList.toggle("hidden", view !== "movimenti");
   elements.viewDashboard.classList.toggle("hidden", view !== "dashboard");
   elements.viewInvestimenti.classList.toggle("hidden", view !== "investimenti");
   elements.viewDashboardInvestimenti.classList.toggle("hidden", view !== "dashboard-investimenti");
+}
+
+function showView(view) {
+  renderTabs(view);
+  try {
+    localStorage.setItem("myfinance:view", view);
+  } catch {
+    // Memoria del browser non disponibile: pazienza
+  }
+  showSection(view);
   // I grafici disegnati mentre la sezione era nascosta vanno ridisegnati
   if (view === "dashboard") renderDashboard();
   if (view === "investimenti" || view === "dashboard-investimenti") renderInvestimenti();
@@ -1845,6 +1861,16 @@ function openMovimentiFiltrati(anno, mese, categoria) {
 
 function bindEvents() {
   elements.tabs.forEach((tab) => tab.addEventListener("click", () => showView(tab.dataset.view)));
+  // Frecce sinistra/destra: si sposta tra le voci dello stesso interruttore
+  document.querySelectorAll(".switch").forEach((sw) => sw.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const voci = [...sw.querySelectorAll(".tab")];
+    const passo = event.key === "ArrowRight" ? 1 : -1;
+    const prossima = voci[(voci.indexOf(document.activeElement) + passo + voci.length) % voci.length];
+    event.preventDefault();
+    prossima.focus();
+    showView(prossima.dataset.view);
+  }));
   elements.refreshButton.addEventListener("click", reload);
   // L'anno vale per la Dashboard: la lista movimenti ha il suo filtro
   const onYearChange = async (event) => {
@@ -1924,7 +1950,6 @@ function bindEvents() {
   elements.viewDashboard.addEventListener("change", (event) => {
     if (event.target.matches(".budget-input")) saveBudget(event.target);
   });
-  elements.saldoInput.addEventListener("change", saveSaldo);
 
   elements.invForm.addEventListener("submit", handleInvestimentoSubmit);
   elements.invCancel.addEventListener("click", () => {
@@ -1956,6 +1981,16 @@ async function init() {
   }
   bindEvents();
   resetInvestimentoForm();
+  // Riapre l'ultima sezione vista (prima di caricare i dati, così i grafici si disegnano già visibili)
+  let ultimaVista = "dashboard";
+  try {
+    ultimaVista = localStorage.getItem("myfinance:view") || ultimaVista;
+  } catch {
+    // Memoria del browser non disponibile: si parte dalla Dashboard
+  }
+  if (!elements.tabs.some((tab) => tab.dataset.view === ultimaVista)) ultimaVista = "dashboard";
+  renderTabs(ultimaVista);
+  showSection(ultimaVista);
   await reload();
 }
 

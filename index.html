@@ -9,17 +9,28 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=10">
+    <link rel="stylesheet" href="./assets/styles.css?v=12">
   </head>
   <body>
     <div class="page-shell">
       <header class="top-bar">
         <h1>MyFinance</h1>
-        <nav class="tabs">
-          <button class="tab active" type="button" data-view="dashboard">Dashboard</button>
-          <button class="tab" type="button" data-view="movimenti">Movimenti</button>
-          <button class="tab" type="button" data-view="dashboard-investimenti">Dashboard investimenti</button>
-          <button class="tab" type="button" data-view="investimenti">Investimenti</button>
+        <!-- Ogni sezione è un interruttore a più posizioni; per aggiungerne una basta un nuovo .switch-group -->
+        <nav class="tabs" aria-label="Sezioni">
+          <div class="switch-group current">
+            <span class="switch-label">Spese</span>
+            <div class="switch" role="tablist" aria-label="Spese">
+              <button class="tab active selected" type="button" role="tab" aria-selected="true" data-view="dashboard">Dashboard</button>
+              <button class="tab" type="button" role="tab" aria-selected="false" data-view="movimenti">Movimenti</button>
+            </div>
+          </div>
+          <div class="switch-group">
+            <span class="switch-label">Investimenti</span>
+            <div class="switch" role="tablist" aria-label="Investimenti">
+              <button class="tab selected" type="button" role="tab" aria-selected="false" data-view="dashboard-investimenti">Dashboard</button>
+              <button class="tab" type="button" role="tab" aria-selected="false" data-view="investimenti">Posizioni</button>
+            </div>
+          </div>
         </nav>
         <button id="refresh-button" class="icon-button" type="button" title="Ricarica" aria-label="Ricarica">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -83,10 +94,11 @@
             <button type="button" class="toggle-button active" data-tipo="uscita">Uscite</button>
             <button type="button" class="toggle-button" data-tipo="entrata">Entrate</button>
           </div>
-          <label id="saldo-field" class="saldo-field">
+          <!-- Calcolato dall'import (conto a fine anno precedente): solo da leggere -->
+          <p id="saldo-field" class="saldo-field">
             Saldo del conto a inizio anno
-            <input id="saldo-input" type="text" inputmode="decimal" placeholder="0,00" autocomplete="off">
-          </label>
+            <strong id="saldo-valore" class="saldo-valore"></strong>
+          </p>
         </div>
 
         <div class="charts">
@@ -200,6 +212,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=10"></script>
+    <script type="module" src="./assets/app.js?v=12"></script>
   </body>
 </html>
