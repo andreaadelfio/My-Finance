@@ -11,13 +11,16 @@ const state = {
   aggregati: [], // somme per anno, mese e categoria calcolate dal database
   budget: [],
   saldi: new Map(), // anno -> saldo del conto a inizio anno
+  riepiloghi: new Map(), // anno -> { mesi, entrate, uscite } dal foglio "Pre 2023"
   mappatura: [], // categoria della banca -> mia categoria
   importazione: null, // anteprima del file Excel in corso di importazione
   investimenti: [],
   // Lista Movimenti: tutti gli anni, caricata a pagine mentre si scorre
   lista: { righe: [], finita: false, caricamento: false, richiesta: 0 },
   filtroTimeoutId: null,
-  editingId: null,
+  editingId: null, // movimento in modifica nella lista (matita)
+  ordinamento: { colonna: "data", crescente: false }, // lista movimenti
+  ordinamentoInv: { colonna: "data", crescente: true }, // registro investimenti: prima il passato
   editingInvestimentoId: null,
   charts: {},
   feedbackTimeoutId: null
@@ -35,21 +38,14 @@ const elements = {
   titoloGraficoCategorie: document.querySelector("#titolo-grafico-categorie"),
   titoloCategorie: document.querySelector("#titolo-categorie"),
   saldoField: document.querySelector("#saldo-field"),
+  andamentoHint: document.querySelector("#andamento-hint"),
   titoloPeriodo: document.querySelector(".titolo-periodo"),
   viewInvestimenti: document.querySelector("#view-investimenti"),
   viewDashboardInvestimenti: document.querySelector("#view-dashboard-investimenti"),
   chartAndamento: document.querySelector("#chart-andamento"),
   chartCategorie: document.querySelector("#chart-categorie"),
-  form: document.querySelector("#movimento-form"),
-  formData: document.querySelector("#f-data"),
-  formTipo: document.querySelector("#f-tipo"),
-  formOperazione: document.querySelector("#f-operazione"),
-  formCategoria: document.querySelector("#f-categoria"),
-  formImporto: document.querySelector("#f-importo"),
-  formNote: document.querySelector("#f-note"),
-  formSubmit: document.querySelector("#f-submit"),
-  formCancel: document.querySelector("#f-cancel"),
-  operazioniList: document.querySelector("#operazioni-list"),
+  sortButtons: [...document.querySelectorAll(".sort-button[data-sort]")],
+  sortButtonsInv: [...document.querySelectorAll(".sort-button[data-sort-inv]")],
   filterAnno: document.querySelector("#filter-anno"),
   filterMese: document.querySelector("#filter-mese"),
   filterCategoria: document.querySelector("#filter-categoria"),
@@ -70,6 +66,7 @@ const elements = {
 
   invForm: document.querySelector("#investimento-form"),
   invData: document.querySelector("#i-data"),
+  invDomani: document.querySelector("#i-domani"),
   invNome: document.querySelector("#i-nome"),
   invPosizione: document.querySelector("#i-posizione"),
   invIsin: document.querySelector("#i-isin"),
@@ -134,6 +131,13 @@ function todayISO() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
+// Data delle operazioni "domani" (nell'Excel =OGGI()+1)
+function tomorrowISO() {
+  const domani = new Date();
+  domani.setDate(domani.getDate() + 1);
+  return `${domani.getFullYear()}-${String(domani.getMonth() + 1).padStart(2, "0")}-${String(domani.getDate()).padStart(2, "0")}`;
+}
+
 function normalize(text) {
   return String(text || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 }
@@ -158,10 +162,6 @@ function categorieDelTipo(tipo, includiMappate = false) {
   return state.categorie
     .filter((categoria) => categoria.tipo === tipo && !mappate.has(categoria.nome))
     .sort((a, b) => a.nome.localeCompare(b.nome, "it"));
-}
-
-function tipoMovimento(movimento) {
-  return categoriaById(movimento.categoria_id)?.tipo || (movimento.importo < 0 ? "uscita" : "entrata");
 }
 
 function showFeedback(message, type = "success") {
@@ -215,13 +215,14 @@ async function loadData() {
       .order("mese");
     return state.year === null ? query : query.eq("anno", state.year);
   };
-  const [categorie, aggregati, budget, saldi, investimenti, mappatura] = await Promise.all([
+  const [categorie, aggregati, budget, saldi, investimenti, mappatura, riepiloghi] = await Promise.all([
     fetchAll(() => state.supabase.from("categorie").select("*").order("id")),
     fetchAll(aggregatiQuery),
     fetchAll(() => state.supabase.from("budget").select("*").order("id")),
     fetchAll(() => state.supabase.from("saldi").select("*").order("anno")),
     fetchAll(() => state.supabase.from("investimenti").select("*").order("data").order("id")),
-    fetchAll(() => state.supabase.from("mappatura_categorie").select("*").order("categoria_banca"))
+    fetchAll(() => state.supabase.from("mappatura_categorie").select("*").order("categoria_banca")),
+    fetchAll(() => state.supabase.from("riepiloghi_annuali").select("*").order("anno"))
   ]);
 
   state.categorie = categorie;
@@ -235,8 +236,15 @@ async function loadData() {
   }));
   state.budget = budget.map((riga) => ({ ...riga, importo_mensile: Number(riga.importo_mensile) }));
   state.saldi = new Map(saldi.map((riga) => [riga.anno, Number(riga.saldo_iniziale)]));
+  const numero = (v) => (v === null || v === undefined ? null : Number(v));
+  state.riepiloghi = new Map(riepiloghi.map((riga) => [riga.anno, {
+    mesi: numero(riga.mesi_lavorati),
+    entrate: numero(riga.entrate),
+    uscite: numero(riga.uscite)
+  }]));
   state.investimenti = investimenti.map((riga) => ({
     ...riga,
+    data: riga.domani ? tomorrowISO() : riga.data,
     importo: Number(riga.importo),
     quantita: riga.quantita === null ? null : Number(riga.quantita)
   }));
@@ -273,14 +281,6 @@ function categoryOptions(tipo) {
     .join("");
 }
 
-function renderFormCategories(selectedId = "") {
-  elements.formCategoria.innerHTML = `
-    <option value="">Categoria...</option>
-    ${categoryOptions(elements.formTipo.value)}
-    <option value="nuova">+ Nuova categoria...</option>`;
-  elements.formCategoria.value = selectedId ? String(selectedId) : "";
-}
-
 function renderFilters() {
   const anno = elements.filterAnno.value;
   const mese = elements.filterMese.value;
@@ -298,14 +298,6 @@ function renderFilters() {
   elements.filterAnno.value = anno;
   elements.filterMese.value = mese;
   elements.filterCategoria.value = categoria;
-}
-
-function renderOperazioniList() {
-  const operazioni = [...new Set(state.lista.righe.map((movimento) => movimento.operazione).filter(Boolean))];
-  elements.operazioniList.innerHTML = operazioni
-    .sort((a, b) => a.localeCompare(b, "it"))
-    .map((operazione) => `<option value="${escapeHtml(operazione)}"></option>`)
-    .join("");
 }
 
 // Applica i filtri alla query: vengono calcolati dal database su tutti i movimenti
@@ -346,9 +338,10 @@ async function loadMovimentiPage(reset = false) {
   const richiesta = lista.richiesta;
   lista.caricamento = true;
   const from = lista.righe.length;
+  const { colonna, crescente } = state.ordinamento;
   const { data, error } = await applyFilters(state.supabase.from("movimenti").select("*"))
-    .order("data", { ascending: false })
-    .order("id", { ascending: false })
+    .order(colonna, { ascending: crescente, nullsFirst: false })
+    .order("id", { ascending: crescente })
     .range(from, from + LISTA_PAGINA - 1);
   if (richiesta !== lista.richiesta) return; // i filtri sono cambiati nel frattempo
   lista.caricamento = false;
@@ -359,7 +352,6 @@ async function loadMovimentiPage(reset = false) {
   lista.righe.push(...data.map((movimento) => ({ ...movimento, importo: Number(movimento.importo) })));
   lista.finita = data.length < LISTA_PAGINA;
   renderMovimenti();
-  renderOperazioniList();
 }
 
 async function loadTotali() {
@@ -415,8 +407,8 @@ function renderMovimenti() {
   if (!lista.righe.length) {
     elements.movimentiBody.innerHTML = `<tr><td colspan="7" class="empty">${lista.finita ? "Nessun movimento con questi filtri." : "Caricamento..."}</td></tr>`;
   } else {
-    elements.movimentiBody.innerHTML = lista.righe.map((movimento) => `
-    <tr class="${movimento.id === state.editingId ? "editing" : ""}">
+    elements.movimentiBody.innerHTML = lista.righe.map((movimento) => (movimento.id === state.editingId ? rigaInModifica(movimento) : `
+    <tr>
       <td data-label="Data">${formatDate(movimento.data)}</td>
       <td data-label="Operazione">
         <span class="operazione">${escapeHtml(movimento.operazione)}</span>
@@ -436,8 +428,9 @@ function renderMovimenti() {
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
         </button>
       </td>
-    </tr>`).join("");
+    </tr>`)).join("");
   }
+  renderSortIndicators(elements.sortButtons, "sort", state.ordinamento);
   elements.listaFine.textContent = !lista.righe.length ? ""
     : lista.finita ? `Fine: ${lista.righe.length} movimenti mostrati.` : "Caricamento di altri movimenti...";
   if (!lista.finita) watchListaFine();
@@ -495,106 +488,86 @@ function onFiltriChange() {
   state.filtroTimeoutId = setTimeout(() => loadMovimentiPage(true), 300);
 }
 
-function resetForm() {
-  state.editingId = null;
-  elements.form.reset();
-  elements.formData.value = todayISO();
-  renderFormCategories();
-  elements.formSubmit.textContent = "Aggiungi";
-  elements.formCancel.classList.add("hidden");
+// Riga in modifica (matita): data, operazione, dettagli, importo e note diventano campi
+function rigaInModifica(movimento) {
+  const campo = (nome, valore, extra = "", classe = "riga-input") =>
+    `<input class="${classe}" data-campo="${nome}" value="${escapeHtml(valore ?? "")}" ${extra} autocomplete="off">`;
+  return `
+    <tr class="editing" data-id="${movimento.id}">
+      <td data-label="Data">${campo("data", movimento.data, 'type="date" aria-label="Data"')}</td>
+      <td data-label="Operazione">
+        ${campo("operazione", movimento.operazione, 'type="text" aria-label="Operazione" placeholder="Operazione"')}
+        ${campo("dettagli", movimento.dettagli, 'type="text" aria-label="Dettagli" placeholder="Dettagli"', "riga-input dettagli-input")}
+      </td>
+      <td data-label="Categoria">
+        <button class="categoria-button" type="button" data-action="categoria" data-id="${movimento.id}" title="Cambia categoria">${escapeHtml(categoriaById(movimento.categoria_id)?.nome || "—")}</button>
+      </td>
+      <td data-label="Importo" class="num">${campo("importo", String(movimento.importo).replace(".", ","), 'type="text" inputmode="decimal" aria-label="Importo (negativo per le uscite)" title="Negativo per le uscite"')}</td>
+      ${cellaBudget(movimento)}
+      <td data-label="Note">${campo("note", movimento.note, 'type="text" aria-label="Note" placeholder="Note"')}</td>
+      <td class="actions">
+        <button class="icon-button" type="button" data-action="save" data-id="${movimento.id}" title="Salva (Invio)" aria-label="Salva">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+        </button>
+        <button class="icon-button" type="button" data-action="cancel" data-id="${movimento.id}" title="Annulla (Esc)" aria-label="Annulla">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </td>
+    </tr>`;
 }
 
 function startEdit(id) {
-  const movimento = state.lista.righe.find((m) => m.id === id);
-  if (!movimento) return;
   state.editingId = id;
-  elements.formData.value = movimento.data;
-  elements.formTipo.value = tipoMovimento(movimento);
-  renderFormCategories(movimento.categoria_id || "");
-  elements.formOperazione.value = movimento.operazione;
-  elements.formImporto.value = String(Math.abs(movimento.importo)).replace(".", ",");
-  elements.formNote.value = movimento.note || "";
-  elements.formSubmit.textContent = "Salva";
-  elements.formCancel.classList.remove("hidden");
-  elements.form.scrollIntoView({ behavior: "smooth", block: "center" });
-  elements.formOperazione.focus();
+  renderMovimenti();
+  elements.movimentiBody.querySelector('tr.editing [data-campo="operazione"]')?.focus();
+}
+
+function annullaModifica() {
+  state.editingId = null;
   renderMovimenti();
 }
 
-// Suggerisce tipo e categoria usati l'ultima volta per la stessa operazione
-async function suggestCategory() {
-  const operazione = elements.formOperazione.value.trim();
-  if (elements.formCategoria.value || !operazione) return;
-  const { data } = await state.supabase
-    .from("movimenti")
-    .select("categoria_id")
-    .ilike("operazione", operazione.replace(/[%_\\]/g, "\\$&"))
-    .not("categoria_id", "is", null)
-    .order("data", { ascending: false })
-    .limit(1);
-  const categoria = data?.length ? categoriaById(data[0].categoria_id) : null;
-  if (!categoria || elements.formCategoria.value) return;
-  elements.formTipo.value = categoria.tipo;
-  renderFormCategories(categoria.id);
-}
-
-async function createCategory() {
-  const tipo = elements.formTipo.value;
-  const nome = (prompt(`Nome della nuova categoria di ${tipo}:`) || "").trim();
-  if (!nome) {
-    renderFormCategories();
-    return;
-  }
-  const esistente = categorieDelTipo(tipo, true).find((categoria) => normalize(categoria.nome) === normalize(nome));
-  if (esistente) {
-    renderFormCategories(esistente.id);
-    return;
-  }
-  const { data, error } = await state.supabase.from("categorie").insert({ nome, tipo }).select().single();
-  if (error) {
-    showFeedback(`Categoria non creata: ${error.message}`, "error");
-    renderFormCategories();
-    return;
-  }
-  state.categorie.push(data);
-  renderFormCategories(data.id);
-  renderFilters();
-}
-
-async function handleSubmit(event) {
-  event.preventDefault();
-  const importo = parseAmount(elements.formImporto.value);
-  if (importo === null || importo === 0) {
-    showFeedback("Importo non valido.", "error");
-    return;
-  }
-  const categoriaId = Number(elements.formCategoria.value);
-  if (!categoriaId) {
-    showFeedback("Scegli una categoria.", "error");
-    return;
-  }
+async function salvaModifica(id) {
+  const riga = elements.movimentiBody.querySelector(`tr.editing[data-id="${id}"]`);
+  if (!riga) return;
+  const valore = (nome) => riga.querySelector(`[data-campo="${nome}"]`).value.trim();
+  const importo = parseAmount(valore("importo"));
+  if (!valore("data")) return showFeedback("Data non valida.", "error");
+  if (importo === null || importo === 0) return showFeedback("Importo non valido (negativo per le uscite).", "error");
   const record = {
-    data: elements.formData.value,
-    operazione: elements.formOperazione.value.trim(),
-    categoria_id: categoriaId,
-    importo: elements.formTipo.value === "uscita" ? -Math.abs(importo) : Math.abs(importo),
-    note: elements.formNote.value.trim() || null
+    data: valore("data"),
+    operazione: valore("operazione"),
+    dettagli: valore("dettagli"),
+    importo: round2(importo),
+    note: valore("note") || null
   };
+  const { data, error } = await state.supabase.from("movimenti").update(record).eq("id", id).select().single();
+  if (error) return showFeedback(`Salvataggio non riuscito: ${error.message}`, "error");
+  state.editingId = null;
+  state.lista.righe = state.lista.righe.map((m) => (m.id === id ? { ...m, ...data, importo: Number(data.importo) } : m));
+  renderMovimenti();
+  showFeedback("Movimento aggiornato.");
+  loadData().then(renderAll).catch((err) => console.error(err));
+  loadTotali();
+}
 
-  elements.formSubmit.disabled = true;
-  const query = state.editingId
-    ? state.supabase.from("movimenti").update(record).eq("id", state.editingId)
-    : state.supabase.from("movimenti").insert(record);
-  const { error } = await query;
-  elements.formSubmit.disabled = false;
-  if (error) {
-    showFeedback(`Salvataggio non riuscito: ${error.message}`, "error");
-    return;
+// Freccette nelle intestazioni ordinabili
+function renderSortIndicators(buttons, attributo, ordinamento) {
+  for (const button of buttons) {
+    const attiva = button.dataset[attributo] === ordinamento.colonna;
+    button.classList.toggle("active", attiva);
+    button.querySelector(".sort-indicator").textContent = attiva ? (ordinamento.crescente ? "↑" : "↓") : "↕";
+    button.closest("th").setAttribute("aria-sort", attiva ? (ordinamento.crescente ? "ascending" : "descending") : "none");
   }
+}
 
-  showFeedback(state.editingId ? "Movimento aggiornato." : "Movimento aggiunto.");
-  resetForm();
-  await reload();
+// Clic su un'intestazione: ordina per quella colonna, secondo clic inverte
+function cambiaOrdinamento(ordinamento, colonna) {
+  if (ordinamento.colonna === colonna) ordinamento.crescente = !ordinamento.crescente;
+  else {
+    ordinamento.colonna = colonna;
+    ordinamento.crescente = !["data", "importo"].includes(colonna); // date e importi: prima i più recenti/grandi
+  }
 }
 
 async function deleteMovimento(id) {
@@ -605,7 +578,7 @@ async function deleteMovimento(id) {
     showFeedback(`Eliminazione non riuscita: ${error.message}`, "error");
     return;
   }
-  if (state.editingId === id) resetForm();
+  if (state.editingId === id) state.editingId = null;
   showFeedback("Movimento eliminato.");
   await reload();
 }
@@ -1047,6 +1020,17 @@ function andamento(elenco) {
     if (tipoAggregato(riga) === "uscita") uscite[i] -= riga.somma;
     else entrate[i] += riga.somma;
   }
+  // Anni senza movimenti (2021, 2022): entrate e uscite dal foglio "Pre 2023"
+  // (nel grafico, per mese: la parte dell'anno indicata da "stima")
+  elenco.forEach((p, i) => {
+    const riepilogo = state.riepiloghi.get(p.anno);
+    if (!riepilogo || !(p.mese === null ? !entrate[i] && !uscite[i] : p.stima)) return;
+    const [prima, dopo] = p.mese === null ? [0, 1] : p.stima;
+    const parte = (totale) => round2((totale ?? 0) * dopo) - round2((totale ?? 0) * prima);
+    entrate[i] = parte(riepilogo.entrate);
+    uscite[i] = parte(riepilogo.uscite);
+    ultimo = Math.max(ultimo, i);
+  });
   const risparmio = entrate.map((valore, i) => round2(valore - uscite[i]));
 
   // Il saldo riparte dal "saldo a inizio anno" di ogni anno che lo ha impostato
@@ -1061,8 +1045,40 @@ function andamento(elenco) {
   return { entrate: entrate.map(round2), uscite: uscite.map(round2), risparmio, saldi };
 }
 
+// Periodi della tabella e del grafico andamento: con tutti gli anni anche gli anni del
+// foglio "Pre 2023" senza movimenti. Nel grafico diventano i mesi lavorati (gli ultimi
+// dell'anno), con la media mensile; "stima" = [parte dell'anno prima del mese, fino a fine
+// mese]: con 8,3 mesi aprile vale 0,3 mesi, e la somma dei mesi torna con il totale.
+function periodiAndamento(perGrafico) {
+  const elenco = periodi(perGrafico);
+  if (!tuttiGliAnni()) return elenco;
+  const anni = new Set(elenco.map((p) => p.anno));
+  for (const [anno, riepilogo] of state.riepiloghi) {
+    if (anni.has(anno)) continue;
+    if (!perGrafico) {
+      elenco.push({ key: String(anno), label: String(anno), anno, mese: null });
+      continue;
+    }
+    const mesi = Math.min(12, riepilogo.mesi ?? 12);
+    const primo = 12 - Math.ceil(mesi) + 1;
+    for (let mese = primo; mese <= 12; mese += 1) {
+      const parte = (fine) => Math.max(0, mesi - (12 - fine)) / mesi;
+      elenco.push({ key: `${anno}-${mese}`, label: `${MESI[mese - 1]} ${anno}`, anno, mese, stima: [parte(mese - 1), parte(mese)] });
+    }
+  }
+  return elenco.sort((a, b) => a.anno - b.anno || (a.mese ?? 0) - (b.mese ?? 0));
+}
+
+// Mesi lavorati per anno: dal riepilogo; altrimenti 12, o i mesi con movimenti per l'anno in corso
+function mesiLavorati(anno) {
+  const riepilogo = state.riepiloghi.get(anno);
+  if (riepilogo?.mesi != null) return riepilogo.mesi;
+  if (anno < new Date().getFullYear()) return 12;
+  return new Set(state.aggregati.filter((r) => r.anno === anno).map((r) => r.mese)).size;
+}
+
 function renderAndamento() {
-  const elenco = periodi(false);
+  const elenco = periodiAndamento(false);
   const { entrate, uscite, risparmio, saldi } = andamento(elenco);
   const media = tuttiGliAnni() ? "Media annua" : "Media mensile";
   const sum = (valori) => valori.reduce((total, v) => total + v, 0);
@@ -1075,6 +1091,29 @@ function renderAndamento() {
     </tr>`;
   const nessunSaldo = saldi.every((v) => v === null);
 
+  // Con tutti gli anni, come il foglio "Pre 2023": mesi lavorati e medie al mese
+  let storico = "";
+  if (tuttiGliAnni()) {
+    const mesi = elenco.map((p) => mesiLavorati(p.anno));
+    const totaleMesi = sum(mesi);
+    const alMese = (label, valori) => `
+      <tr>
+        <th>${label}</th>
+        ${valori.map((v, i) => cell(mesi[i] ? v / mesi[i] : 0)).join("")}
+        ${cell(totaleMesi ? sum(valori) / totaleMesi : 0)}
+        <td></td>
+      </tr>`;
+    storico = `
+      <tr>
+        <th>Mesi lavorati</th>
+        ${mesi.map((m) => `<td class="num">${m.toLocaleString("it-IT")}</td>`).join("")}
+        <td class="num">${totaleMesi.toLocaleString("it-IT")}</td>
+        <td></td>
+      </tr>
+      ${alMese("Entrate al mese", entrate)}
+      ${alMese("Uscite al mese", uscite)}`;
+  }
+
   elements.andamentoTable.innerHTML = !elenco.length ? '<tbody><tr><td class="empty">Nessun dato.</td></tr></tbody>' : `
     ${periodHeader("", elenco, [tuttiGliAnni() ? "Totale" : "Totale anno", media])}
     <tbody>
@@ -1086,7 +1125,9 @@ function renderAndamento() {
         ${saldi.map((v) => (v === null ? '<td class="num"><span class="zero">—</span></td>' : cell(v))).join("")}
         <td class="num" colspan="2">${nessunSaldo ? '<span class="zero">imposta il saldo iniziale</span>' : ""}</td>
       </tr>
+      ${storico}
     </tbody>`;
+  elements.andamentoHint.classList.toggle("hidden", !tuttiGliAnni() || !state.riepiloghi.size);
 }
 
 function renderCategoryTable(table, tipo) {
@@ -1209,6 +1250,37 @@ const percentLabels = {
   }
 };
 
+// Linea verticale sulla data di oggi: options.plugins.lineaOggi.posizione è la posizione
+// sull'asse x: per un asse a etichette il "numero di punto", anche con la virgola (3,5 = a metà
+// tra il 4° e il 5°); per un asse numerico (grafico investimenti) il valore, cioè la data
+const lineaOggi = {
+  id: "lineaOggi",
+  afterDatasetsDraw(chart, _args, options) {
+    const posizione = options?.posizione;
+    if (posizione === null || posizione === undefined) return;
+    const scala = chart.scales.x;
+    const primo = Math.floor(posizione);
+    const x0 = scala.getPixelForValue(primo);
+    const { top, bottom, left, right } = chart.chartArea;
+    const x = Math.min(right, Math.max(left, x0 + (posizione - primo) * (scala.getPixelForValue(primo + 1) - x0 || 0)));
+    const { ctx } = chart;
+    ctx.save();
+    ctx.strokeStyle = "#1f2a24";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.stroke();
+    ctx.fillStyle = "#1f2a24";
+    ctx.font = "bold 11px sans-serif";
+    // Vicino ai bordi la scritta va verso l'interno, per non essere tagliata
+    ctx.textAlign = x > right - 20 ? "right" : x < left + 20 ? "left" : "center";
+    ctx.fillText("oggi", x, top - 4);
+    ctx.restore();
+  }
+};
+
 function drawChart(key, canvas, config) {
   if (!window.Chart) return;
   state.charts[key]?.destroy();
@@ -1243,27 +1315,50 @@ function totaliCategorie(tipo) {
     .sort((a, b) => a.nome.localeCompare(b.nome, "it"));
 }
 
+// Posizione di oggi nel grafico mese per mese (null se il mese corrente non c'è): ogni punto
+// è il totale di un mese, quindi oggi cade tra il punto del mese scorso e quello del mese corrente
+function posizioneOggiMesi(elenco) {
+  const oggi = new Date();
+  const i = elenco.findIndex((p) => p.anno === oggi.getFullYear() && p.mese === oggi.getMonth() + 1);
+  if (i < 0) return null;
+  const giorniMese = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 0).getDate();
+  return Math.max(0, i - 1 + oggi.getDate() / giorniMese);
+}
+
 function renderCharts() {
-  const elenco = periodi(true);
+  const elenco = periodiAndamento(true);
   const { entrate, uscite, risparmio, saldi } = andamento(elenco);
   drawChart("andamento", elements.chartAndamento, {
     type: "line",
     data: {
       labels: elenco.map((p) => p.label),
       datasets: [
-        { label: "Totale Uscite", data: uscite, borderColor: "#4472c4", backgroundColor: "#4472c4" },
-        { label: "Totale Entrate", data: entrate, borderColor: "#ed7d31", backgroundColor: "#ed7d31" },
-        { label: "Risparmio", data: risparmio, borderColor: "#a5a5a5", backgroundColor: "#a5a5a5" },
-        { label: "Saldo", data: saldi, borderColor: "#ffc000", backgroundColor: "#ffc000" }
+        { label: "Totale Uscite", data: uscite, borderColor: "#c0392b", backgroundColor: "#c0392b" },
+        { label: "Totale Entrate", data: entrate, borderColor: "#2e8b57", backgroundColor: "#2e8b57" },
+        { label: "Risparmio", data: risparmio, borderColor: "#2f6fbf", backgroundColor: "#2f6fbf" },
+        { label: "Saldo", data: saldi, borderColor: "#8a8a8a", backgroundColor: "#8a8a8a" }
       ]
     },
     options: {
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       elements: { point: { radius: tuttiGliAnni() ? 0 : 3 } },
-      plugins: { legend: { position: "bottom" }, tooltip: euroTooltip },
-      scales: euroAxis
-    }
+      // Mesi del foglio "Pre 2023" (medie mensili): linea tratteggiata
+      datasets: { line: { segment: { borderDash: (ctx) => (elenco[ctx.p1DataIndex]?.stima ? [5, 4] : undefined) } } },
+      plugins: {
+        legend: { position: "bottom" },
+        lineaOggi: { posizione: posizioneOggiMesi(elenco) },
+        tooltip: {
+          callbacks: {
+            ...euroTooltip.callbacks,
+            title: (items) => `${items[0].label}${elenco[items[0].dataIndex]?.stima ? " (media mensile dal foglio Pre 2023)" : ""}`
+          }
+        }
+      },
+      scales: euroAxis,
+      layout: { padding: { top: 14 } }
+    },
+    plugins: [lineaOggi]
   });
 
   const categorie = totaliCategorie("uscita");
@@ -1474,8 +1569,22 @@ function renderInvestimenti() {
 
   const oggi = todayISO();
   // Il registro mostra sempre tutte le operazioni, anche quelle future (in corsivo)
-  elements.operazioniBody.innerHTML = [...state.investimenti].reverse().map((riga) => `
-    <tr class="${riga.data > oggi ? "future" : ""} ${riga.id === state.editingInvestimentoId ? "editing" : ""}" ${riga.data > oggi ? 'title="Operazione prevista"' : ""}>
+  // Ordinamento scelto dalle intestazioni (a parità di valore, per data e id)
+  const { colonna, crescente } = state.ordinamentoInv;
+  const confronta = (a, b) => {
+    const va = a[colonna] ?? "";
+    const vb = b[colonna] ?? "";
+    const diff = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb), "it");
+    return diff || a.data.localeCompare(b.data) || a.id - b.id;
+  };
+  const operazioni = [...state.investimenti].sort((a, b) => (crescente ? confronta(a, b) : confronta(b, a)));
+  // L'ultima operazione già avvenuta (la più recente fino a oggi) è evidenziata in verde
+  const ultima = state.investimenti
+    .filter((riga) => riga.data <= oggi)
+    .reduce((u, riga) => (!u || riga.data > u.data || (riga.data === u.data && riga.id > u.id) ? riga : u), null);
+  renderSortIndicators(elements.sortButtonsInv, "sortInv", state.ordinamentoInv);
+  elements.operazioniBody.innerHTML = operazioni.map((riga) => `
+    <tr class="${riga.data > oggi ? "future" : ""} ${riga === ultima ? "ultima" : ""} ${riga.id === state.editingInvestimentoId ? "editing" : ""}" ${riga === ultima ? 'title="Ultima operazione avvenuta"' : riga.domani ? 'title="Valore attuale: la data è sempre domani (come =OGGI()+1 nell\'Excel)"' : riga.data > oggi ? 'title="Operazione prevista"' : ""}>
       <td>${formatDate(riga.data)}</td>
       <td class="num">${riga.posizione}</td>
       <td>${escapeHtml(riga.nome)}</td>
@@ -1505,14 +1614,15 @@ function renderInvestimenti() {
 // Grafici come nel foglio: torta per tipo e andamento cumulato delle operazioni
 function renderInvestimentiCharts(righe, tipi) {
   const oggi = todayISO();
-  let investito = 0;
-  let rimborsiCedole = 0;
+  // Totali cumulati: capitale investito (positivo), rimborsi, cedole e dividendi
+  const cumulati = { investito: 0, rimborsi: 0, cedole: 0 };
   const punti = [];
   const sintesi = { investito: 0, restituito: 0, interessi: 0 };
   for (const riga of [...righe].sort((a, b) => a.data.localeCompare(b.data))) {
-    if (riga.operazione === "Investimento") investito += riga.importo;
-    else rimborsiCedole += riga.importo;
-    punti.push({ data: riga.data, investito: round2(investito), rimborsiCedole: round2(rimborsiCedole) });
+    if (riga.operazione === "Investimento") cumulati.investito -= riga.importo;
+    else if (riga.operazione === "Rimborso") cumulati.rimborsi += riga.importo;
+    else cumulati.cedole += riga.importo;
+    punti.push({ data: riga.data, ...cumulati });
     if (riga.data <= oggi) {
       if (riga.operazione === "Investimento") sintesi.investito += -riga.importo;
       else if (riga.operazione === "Rimborso") sintesi.restituito += riga.importo;
@@ -1552,14 +1662,26 @@ function renderInvestimentiCharts(righe, tipi) {
     plugins: [percentLabels]
   });
 
+  // Asse x per date vere (millisecondi), con una tacca a inizio di ogni anno
+  const giorno = (iso) => new Date(`${iso}T00:00:00`).getTime();
+  const linea = (label, colore, valore) => ({
+    label,
+    data: punti.map((p) => ({ x: giorno(p.data), y: round2(valore(p)) })),
+    borderColor: colore,
+    backgroundColor: colore
+  });
+  const primoAnno = punti.length ? Number(punti[0].data.slice(0, 4)) : 0;
+  const ultimoAnno = punti.length ? Number(punti[punti.length - 1].data.slice(0, 4)) : 0;
+
   drawChart("investimenti", elements.chartInvestimenti, {
     type: "line",
     data: {
-      labels: punti.map((p) => formatDate(p.data)),
       datasets: [
-        { label: "Capitale investito", data: punti.map((p) => p.investito), borderColor: "#4472c4", backgroundColor: "#4472c4" },
-        { label: "Rimborsi + cedole", data: punti.map((p) => p.rimborsiCedole), borderColor: "#ed7d31", backgroundColor: "#ed7d31" },
-        { label: "Capitale cumulato", data: punti.map((p) => round2(p.investito + p.rimborsiCedole)), borderColor: "#a5a5a5", backgroundColor: "#a5a5a5" }
+        linea("Capitale investito", "#4472c4", (p) => p.investito),
+        linea("Rimborsi", "#ed7d31", (p) => p.rimborsi),
+        linea("Cedole e dividendi", "#2e8b57", (p) => p.cedole),
+        // Negativo: soldi ancora investiti; sopra zero: guadagno
+        linea("Saldo netto (rientrato − investito)", "#8a8a8a", (p) => p.rimborsi + p.cedole - p.investito)
       ]
     },
     options: {
@@ -1568,13 +1690,30 @@ function renderInvestimentiCharts(righe, tipi) {
       elements: { point: { radius: 0 }, line: { stepped: true } },
       plugins: {
         legend: { position: "bottom" },
-        tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${formatEuro(item.raw)}` } }
+        lineaOggi: { posizione: punti.length ? giorno(oggi) : null },
+        tooltip: {
+          callbacks: {
+            title: (items) => formatDate(punti[items[0].dataIndex].data),
+            label: (item) => `${item.dataset.label}: ${formatEuro(item.raw.y)}`
+          }
+        }
       },
       scales: {
-        x: { ticks: { maxTicksLimit: 14 } },
+        x: {
+          type: "linear",
+          min: giorno(`${primoAnno}-01-01`),
+          max: giorno(`${ultimoAnno + 1}-01-01`),
+          afterBuildTicks: (scala) => {
+            scala.ticks = [];
+            for (let anno = primoAnno; anno <= ultimoAnno + 1; anno += 1) scala.ticks.push({ value: giorno(`${anno}-01-01`) });
+          },
+          ticks: { callback: (valore) => new Date(valore).getFullYear() }
+        },
         y: { ticks: { callback: (value) => formatEuro(value) } }
-      }
-    }
+      },
+      layout: { padding: { top: 14 } }
+    },
+    plugins: [lineaOggi]
   });
 }
 
@@ -1582,6 +1721,7 @@ function resetInvestimentoForm() {
   state.editingInvestimentoId = null;
   elements.invForm.reset();
   elements.invData.value = todayISO();
+  elements.invData.disabled = false;
   elements.invSubmit.textContent = "Aggiungi";
   elements.invCancel.classList.add("hidden");
 }
@@ -1608,6 +1748,8 @@ function startEditInvestimento(id) {
   state.editingInvestimentoId = id;
   const numero = (v) => (v === null || v === undefined ? "" : String(Math.abs(v)).replace(".", ","));
   elements.invData.value = riga.data;
+  elements.invDomani.checked = riga.domani;
+  elements.invData.disabled = riga.domani;
   elements.invNome.value = riga.nome;
   elements.invPosizione.value = riga.posizione;
   elements.invIsin.value = riga.isin || "";
@@ -1631,7 +1773,8 @@ async function handleInvestimentoSubmit(event) {
   if (importo === null || importo === 0) return showFeedback("Importo non valido.", "error");
   const opzionale = (input) => (input.value.trim() ? parseAmount(input.value) : null);
   const record = {
-    data: elements.invData.value,
+    data: elements.invDomani.checked ? tomorrowISO() : elements.invData.value,
+    domani: elements.invDomani.checked,
     posizione: Number(elements.invPosizione.value),
     nome: elements.invNome.value.trim(),
     isin: elements.invIsin.value.trim() || null,
@@ -1685,8 +1828,6 @@ function showView(view) {
 function renderAll() {
   renderYearSelect();
   renderFilters();
-  renderOperazioniList();
-  if (!state.editingId) renderFormCategories(elements.formCategoria.value);
   renderDashboard();
   renderInvestimenti();
 }
@@ -1718,15 +1859,19 @@ function bindEvents() {
   };
   elements.yearSelects.forEach((select) => select.addEventListener("change", onYearChange));
 
-  elements.form.addEventListener("submit", handleSubmit);
-  elements.formCancel.addEventListener("click", () => {
-    resetForm();
-    renderMovimenti();
-  });
-  elements.formTipo.addEventListener("change", () => renderFormCategories());
-  elements.formOperazione.addEventListener("change", suggestCategory);
-  elements.formCategoria.addEventListener("change", () => {
-    if (elements.formCategoria.value === "nuova") createCategory();
+  elements.sortButtons.forEach((button) => button.addEventListener("click", () => {
+    cambiaOrdinamento(state.ordinamento, button.dataset.sort);
+    loadMovimentiPage(true);
+  }));
+  elements.sortButtonsInv.forEach((button) => button.addEventListener("click", () => {
+    cambiaOrdinamento(state.ordinamentoInv, button.dataset.sortInv);
+    renderInvestimenti();
+  }));
+  elements.movimentiBody.addEventListener("keydown", (event) => {
+    const riga = event.target.closest("tr.editing");
+    if (!riga || !event.target.matches(".riga-input")) return;
+    if (event.key === "Enter") salvaModifica(Number(riga.dataset.id));
+    if (event.key === "Escape") annullaModifica();
   });
 
   elements.excelButton.addEventListener("click", () => elements.excelInput.click());
@@ -1764,6 +1909,8 @@ function bindEvents() {
     if (button.dataset.action === "edit") startEdit(id);
     if (button.dataset.action === "delete") deleteMovimento(id);
     if (button.dataset.action === "categoria") apriSceltaCategoria(button, id);
+    if (button.dataset.action === "save") salvaModifica(id);
+    if (button.dataset.action === "cancel") annullaModifica();
   });
 
   elements.viewDashboard.addEventListener("click", (event) => {
@@ -1785,6 +1932,10 @@ function bindEvents() {
     renderInvestimenti();
   });
   elements.invNome.addEventListener("change", fillInvestimentoFromNome);
+  elements.invDomani.addEventListener("change", () => {
+    elements.invData.disabled = elements.invDomani.checked;
+    if (elements.invDomani.checked) elements.invData.value = tomorrowISO();
+  });
   elements.invFuture.addEventListener("change", renderInvestimenti);
   elements.operazioniBody.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-action]");
@@ -1804,7 +1955,6 @@ async function init() {
     return;
   }
   bindEvents();
-  resetForm();
   resetInvestimentoForm();
   await reload();
 }

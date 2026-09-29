@@ -9,7 +9,10 @@ Cosa legge da ogni file:
     oppure, se mancano, il primo foglio con una riga di intestazione che contiene
     "Data" e "Importo" (es. estratto conto esportato dalla banca);
   - "Dashboard Riassuntiva": budget mensile per categoria e saldo del conto a inizio anno;
-  - "Investimenti Dashboard": registro delle operazioni sugli investimenti.
+  - "Investimenti Dashboard": registro delle operazioni sugli investimenti (le righe con
+    data =OGGI()+1 diventano operazioni "domani", sempre con la data di domani);
+  - "Pre 2023" (Anno | Mesi lavorati | Guadagno | Spesa | ... | Conto corrente): riepiloghi
+    annuali e saldi a inizio anno (questi ultimi solo se mancano nel database).
 
 Si può rilanciare sugli stessi file: i movimenti già presenti non vengono duplicati
 (stessa data, importo, operazione e dettagli), così come le operazioni sugli
@@ -82,13 +85,14 @@ class Supabase:
             created += self.request("POST", table, rows[start:start + 500], prefer="return=representation")
         return created
 
-    def upsert(self, table, rows, on_conflict):
+    def upsert(self, table, rows, on_conflict, ignora_esistenti=False):
+        """Inserisce o aggiorna; con ignora_esistenti=True le righe già presenti restano com'erano."""
         if rows:
             self.request(
                 "POST",
                 f"{table}?on_conflict={urllib.parse.quote(on_conflict)}",
                 rows,
-                prefer="resolution=merge-duplicates,return=minimal",
+                prefer=f"resolution={'ignore' if ignora_esistenti else 'merge'}-duplicates,return=minimal",
             )
 
 
@@ -191,22 +195,28 @@ def read_dashboard(workbook):
     return budget, saldo
 
 
-def read_investimenti(workbook):
-    """Registro del foglio "Investimenti Dashboard" (intestazione ID | Data | Nome | ...)."""
+def read_investimenti(workbook, formule):
+    """Registro del foglio "Investimenti Dashboard" (intestazione ID | Data | Nome | ...).
+    Le righe con data =OGGI()+1 (formule: lo stesso file letto con le formule) diventano
+    operazioni "domani": per il sito la loro data è sempre domani."""
     if "Investimenti Dashboard" not in workbook.sheetnames:
         return []
     sheet = workbook["Investimenti Dashboard"]
+    date_formule = [row[0] for row in formule["Investimenti Dashboard"].iter_rows(min_col=2, max_col=2, values_only=True)]
+    domani = (dt.date.today() + dt.timedelta(days=1)).isoformat()
     righe, header_trovato = [], False
-    for row in sheet.iter_rows(max_col=18, values_only=True):
+    for numero, row in enumerate(sheet.iter_rows(max_col=18, values_only=True)):
         if not header_trovato:
             header_trovato = text(row[0]) == "ID" and text(row[1]) == "Data" and text(row[2]) == "Nome"
             continue
         data, importo = to_date(row[1]), to_number(row[8])
         if row[0] is None or not data or importo is None:
             continue
+        is_domani = "TODAY()" in text(date_formule[numero]).upper()
         righe.append({
             "posizione": int(row[0]),
-            "data": data,
+            "data": domani if is_domani else data,
+            "domani": is_domani,
             "nome": text(row[2]),
             "isin": text(row[3]) if text(row[3]) not in ("", "-") else None,
             "prodotto": text(row[4]) or None,
@@ -219,6 +229,41 @@ def read_investimenti(workbook):
             "note": text(row[17]) or None,
         })
     return righe
+
+
+def read_riepiloghi(workbook):
+    """Foglio "Pre 2023": Anno | Mesi lavorati | Guadagno annuo totale | Spesa totale | ... | Conto corrente."""
+    for sheet in workbook.worksheets:
+        if text(sheet["A1"].value) != "Anno" or text(sheet["B1"].value) != "Mesi lavorati":
+            continue
+        header = [text(cell.value).lower() for cell in sheet[1]]
+        col = {nome: header.index(nome) for nome in ("guadagno annuo totale", "spesa totale", "conto corrente") if nome in header}
+        riepiloghi = []
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            anno = to_number(row[0])
+            if not anno:
+                continue
+            riepiloghi.append({
+                "anno": int(anno),
+                "mesi_lavorati": to_number(row[1]),
+                "entrate": to_number(row[col["guadagno annuo totale"]]),
+                "uscite": to_number(row[col["spesa totale"]]),
+                "conto": to_number(row[col["conto corrente"]]) if "conto corrente" in col else None,
+            })
+        return riepiloghi
+    return []
+
+
+def saldi_da_riepiloghi(riepiloghi):
+    """Saldo a inizio anno: il conto a fine anno precedente; per il primo anno, conto - risparmio."""
+    saldi = {}
+    for r in sorted(riepiloghi, key=lambda r: r["anno"]):
+        if r["conto"] is None:
+            continue
+        saldi[r["anno"] + 1] = round(r["conto"], 2)
+        if r["anno"] not in saldi and r["entrate"] is not None and r["uscite"] is not None:
+            saldi[r["anno"]] = round(r["conto"] - (r["entrate"] - r["uscite"]), 2)
+    return saldi
 
 
 def workbook_year(movimenti):
@@ -246,12 +291,19 @@ def main():
     warnings.simplefilter("ignore")
 
     files = []
+    riepiloghi = []
     for path in args.files:
         workbook = openpyxl.load_workbook(path, data_only=True)
+        riepiloghi_file = read_riepiloghi(workbook)
+        if riepiloghi_file:
+            riepiloghi += riepiloghi_file
+            print(f"{path.name}: riepiloghi annuali {', '.join(str(r['anno']) for r in riepiloghi_file)}, "
+                  f"saldi a inizio anno {saldi_da_riepiloghi(riepiloghi_file)}")
+            continue
         movimenti = read_movimenti(workbook)
         year = workbook_year(movimenti)
         budget, saldo = read_dashboard(workbook)
-        investimenti = read_investimenti(workbook)
+        investimenti = read_investimenti(workbook, openpyxl.load_workbook(path) if "Investimenti Dashboard" in workbook.sheetnames else None)
         files.append((path, movimenti, year, budget, saldo, investimenti))
         entrate = sum(m["importo"] for m in movimenti if m["tipo"] == "entrata")
         uscite = -sum(m["importo"] for m in movimenti if m["tipo"] == "uscita")
@@ -285,16 +337,22 @@ def main():
         movimento_key(r["data"], r["importo"], r["operazione"], r["dettagli"])
         for r in db.select_all("movimenti", "data,importo,operazione,dettagli")
     )
+    # Le operazioni "domani" si confrontano senza la data (che cambia ogni giorno)
+    def chiave_investimento(r):
+        return investimento_key(r["posizione"], "domani" if r["domani"] else r["data"], r["operazione"], r["importo"])
+
     investimenti_presenti = Counter(
-        investimento_key(r["posizione"], r["data"], r["operazione"], r["importo"])
-        for r in db.select_all("investimenti", "posizione,data,operazione,importo")
+        chiave_investimento(r) for r in db.select_all("investimenti", "posizione,data,domani,operazione,importo")
     )
+    # Ogni file si confronta con il database com'è in quel momento (movimenti già presenti
+    # più quelli inseriti dai file precedenti): due file che si sovrappongono non creano doppioni
     for path, movimenti, year, budget, saldo, investimenti in files:
+        disponibili = presenti.copy()
         da_inserire = []
         for m in movimenti:
             key = movimento_key(m["data"], m["importo"], m["operazione"], m["dettagli"])
-            if presenti[key] > 0:
-                presenti[key] -= 1
+            if disponibili[key] > 0:
+                disponibili[key] -= 1
                 continue
             da_inserire.append({
                 "data": m["data"],
@@ -305,6 +363,7 @@ def main():
                 "note": m["note"],
             })
         db.insert("movimenti", da_inserire)
+        presenti.update(movimento_key(r["data"], r["importo"], r["operazione"], r["dettagli"]) for r in da_inserire)
 
         db.upsert("budget", [
             {"categoria_id": mappatura.get(nome) or categorie[("uscita", nome)], "anno": year, "importo_mensile": valore}
@@ -313,18 +372,32 @@ def main():
         if saldo is not None and year:
             db.upsert("saldi", [{"anno": year, "saldo_iniziale": saldo}], "anno")
 
+        investimenti_disponibili = investimenti_presenti.copy()
         nuovi_investimenti = []
         for riga in investimenti:
-            key = investimento_key(riga["posizione"], riga["data"], riga["operazione"], riga["importo"])
-            if investimenti_presenti[key] > 0:
-                investimenti_presenti[key] -= 1
+            key = chiave_investimento(riga)
+            if investimenti_disponibili[key] > 0:
+                investimenti_disponibili[key] -= 1
             else:
                 nuovi_investimenti.append(riga)
         db.insert("investimenti", nuovi_investimenti)
+        investimenti_presenti.update(chiave_investimento(r) for r in nuovi_investimenti)
 
         print(f"{path.name}: {len(da_inserire)} movimenti nuovi, "
               f"{len(movimenti) - len(da_inserire)} già presenti, budget {year} aggiornati: {len(budget)}, "
               f"{len(nuovi_investimenti)} operazioni investimenti nuove")
+
+    # Riepiloghi annuali (Pre 2023) e saldi a inizio anno che ne derivano:
+    # i saldi già presenti nel database non vengono sovrascritti
+    if riepiloghi:
+        db.upsert("riepiloghi_annuali", [
+            {"anno": r["anno"], "mesi_lavorati": r["mesi_lavorati"], "entrate": r["entrate"], "uscite": r["uscite"]}
+            for r in riepiloghi
+        ], "anno")
+        saldi = saldi_da_riepiloghi(riepiloghi)
+        db.upsert("saldi", [{"anno": anno, "saldo_iniziale": saldo} for anno, saldo in saldi.items()],
+                  "anno", ignora_esistenti=True)
+        print(f"Riepiloghi annuali salvati: {len(riepiloghi)}; saldi a inizio anno (se mancavano): {saldi}")
 
 
 if __name__ == "__main__":

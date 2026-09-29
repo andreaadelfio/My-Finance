@@ -17,10 +17,11 @@ Sostituisce il file Excel `Portafogli.xlsx` per movimenti, budget e riepilogo an
 - **Movimenti**: un'unica lista di tutti gli anni, dal più recente. Le righe si caricano
   100 alla volta mentre scorri la pagina. I filtri (anno, mese, categoria, ricerca) e i
   totali vengono calcolati dal database su tutti i movimenti, non solo su quelli caricati.
-  Aggiungi, modifica ed elimina entrate e uscite. L'importo si scrive positivo:
-  il segno lo decide il tipo (Uscita/Entrata). Scrivendo un'operazione già vista,
-  la categoria viene proposta in automatico. Cliccando la categoria di una riga si apre una
-  tendina per cambiarla al volo.
+  Cliccando le intestazioni delle colonne si ordina la lista (secondo clic: ordine inverso),
+  sempre su tutti i movimenti. I movimenti si aggiungono da Excel ("+ Excel"); la matita rende
+  modificabili data, operazione, dettagli, importo (negativo per le uscite) e note della riga
+  (Invio salva, Esc annulla). Cliccando la categoria di una riga si apre una tendina per
+  cambiarla al volo.
   La colonna **Budget** mostra il budget mensile della categoria nell'anno del movimento (se in
   quell'anno la categoria non era ancora nel budget, vale il primo budget successivo): rossa se
   il movimento da solo lo supera, gialla ("nessuno") se la categoria non ha budget. Il filtro
@@ -35,9 +36,25 @@ Sostituisce il file Excel `Portafogli.xlsx` per movimenti, budget e riepilogo an
   Il selettore **Uscite / Entrate** (di default Uscite) passa alla vista della "Dashboard Entrate":
   torta del totale per categoria, una linea per categoria nel tempo e tabella delle entrate.
 - **Dashboard investimenti**: come "Investimenti Dashboard": sintesi, grafici, riepilogo per
-  posizione e per tipo (con o senza le operazioni future già in calendario).
+  posizione e per tipo (con o senza le operazioni future già in calendario). Il grafico
+  "Andamento nel tempo" ha l'asse per date e mostra, cumulati, capitale investito, rimborsi,
+  cedole e dividendi e il saldo netto (rientrato − investito: sopra zero è guadagno).
 - **Investimenti**: registro di tutte le operazioni (investimenti, rimborsi, cedole, dividendi)
-  con il modulo per aggiungerle, modificarle ed eliminarle.
+  con il modulo per aggiungerle, modificarle ed eliminarle; colonne ordinabili. Di default va
+  dal passato al futuro, con in verde l'ultima operazione già avvenuta.
+  Le operazioni **"Sempre domani"** (colonna `domani` della tabella `investimenti`, come le
+  date `=OGGI()+1` dell'Excel) sono il valore attuale di una posizione ancora aperta, come se
+  la chiudessi domani: per il sito la loro data è sempre domani, qualunque data sia scritta
+  nel database. Quando chiudi davvero la posizione, togli la spunta e metti la data vera.
+
+Nei grafici dell'andamento (Dashboard e Dashboard investimenti) una linea tratteggiata
+verticale segna la data di oggi.
+
+Con "Tutti gli anni" la tabella **Andamento annuale** parte dal 2021, come il foglio "Pre 2023":
+oltre a entrate, uscite, risparmio e saldo a fine anno mostra mesi lavorati ed entrate e uscite
+al mese. Gli anni senza movimenti vengono dalla tabella `riepiloghi_annuali` (importata da
+`Pre 2023.xlsx`), il saldo parte dai saldi a inizio anno. Nel grafico questi anni compaiono
+sui mesi lavorati con la media mensile, a linea tratteggiata.
 
 I totali della Dashboard sono sommati dal database (per anno, mese e categoria):
 il sito non scarica tutti i movimenti.
@@ -54,14 +71,13 @@ il sito non scarica tutti i movimenti.
    cd ~/Dropbox/Documenti/Finanza/Portafogli
    python3 ~/Dropbox/Progetti/Python/MyFinance/import_excel.py \
      "Storico/Portafogli 2023.xlsx" "Storico/Portafogli 2024.xlsx" \
-     "Storico/Portafogli 2025.xlsx" Portafogli.xlsx
+     "Storico/Portafogli 2025.xlsx" Portafogli.xlsx "Storico/Pre 2023.xlsx"
    ```
 
    Con `--dry-run` legge i file e mostra i totali senza scrivere nulla.
 
 ## Aggiungere movimenti recenti
 
-- A mano dal sito, in Movimenti.
 - Con il pulsante **+ Excel** in Movimenti: scegli l'estratto conto esportato dalla banca
   (serve una riga di intestazione con almeno "Data" e "Importo") oppure un file Portafogli.
   Il sito mostra un'anteprima: quanti movimenti sono nuovi e quanti già presenti (saltati),

@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=2">
+    <link rel="stylesheet" href="./assets/styles.css?v=10">
   </head>
   <body>
     <div class="page-shell">
@@ -32,26 +32,14 @@
 
       <!-- MOVIMENTI -->
       <section id="view-movimenti" class="panel hidden">
-        <form id="movimento-form" class="entry-form">
-          <input id="f-data" name="data" type="date" required aria-label="Data">
-          <select id="f-tipo" name="tipo" aria-label="Tipo">
-            <option value="uscita">Uscita</option>
-            <option value="entrata">Entrata</option>
-          </select>
-          <input id="f-operazione" name="operazione" type="text" list="operazioni-list" placeholder="Operazione" required autocomplete="off">
-          <datalist id="operazioni-list"></datalist>
-          <select id="f-categoria" name="categoria" required aria-label="Categoria"></select>
-          <input id="f-importo" name="importo" type="text" inputmode="decimal" placeholder="Importo €" required autocomplete="off">
-          <input id="f-note" name="note" type="text" placeholder="Note" autocomplete="off">
-          <button id="f-submit" class="primary-button" type="submit">Aggiungi</button>
-          <button id="f-cancel" class="secondary-button hidden" type="button">Annulla</button>
+        <div class="toolbar">
           <button id="excel-button" class="secondary-button excel-button" type="button" title="Importa i movimenti da un file Excel (estratto conto della banca o Portafogli)">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm1 2v4h6V5H5zm8 0v4h6V5h-6zm-8 6v4h6v-4H5zm8 0v4h6v-4h-6zm-8 6v2h6v-2H5zm8 0v2h6v-2h-6z"/></svg>
             + Excel
           </button>
           <input id="excel-input" type="file" accept=".xlsx,.xls" hidden>
           <button id="mappatura-button" class="secondary-button" type="button" title="Categorie della banca e categorie tue corrispondenti">Mappatura categorie</button>
-        </form>
+        </div>
 
         <div id="import-panel" class="box hidden"></div>
         <div id="mappatura-panel" class="box hidden"></div>
@@ -69,12 +57,12 @@
           <table class="movimenti-table">
             <thead>
               <tr>
-                <th>Data</th>
-                <th>Operazione</th>
-                <th>Categoria</th>
-                <th class="num">Importo</th>
+                <th><button class="sort-button" type="button" data-sort="data">Data<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-sort="operazione">Operazione<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-sort="categoria">Categoria<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th class="num"><button class="sort-button" type="button" data-sort="importo">Importo<span class="sort-indicator" aria-hidden="true"></span></button></th>
                 <th class="num" title="Budget mensile della categoria; in rosso se il movimento lo supera">Budget</th>
-                <th>Note</th>
+                <th><button class="sort-button" type="button" data-sort="note">Note<span class="sort-indicator" aria-hidden="true"></span></button></th>
                 <th></th>
               </tr>
             </thead>
@@ -116,6 +104,8 @@
         <div class="table-wrap">
           <table id="andamento-table" class="summary-table"></table>
         </div>
+        <p id="andamento-hint" class="hint hidden">Gli anni senza movimenti (2021, 2022) vengono dal foglio Pre 2023 (nel grafico: media mensile sui mesi lavorati, tratteggiata):
+          mesi lavorati, entrate e uscite si modificano nella tabella <code>riepiloghi_annuali</code> di Supabase.</p>
 
         <h2><span id="titolo-categorie"></span> <span class="unit">(€)</span></h2>
         <p class="hint"><span id="budget-hint"></span> Clicca un importo per vedere i movimenti.</p>
@@ -160,6 +150,9 @@
       <section id="view-investimenti" class="panel hidden">
         <form id="investimento-form" class="entry-form">
           <input id="i-data" type="date" required aria-label="Data">
+          <label class="check-field" title="Valore attuale di una posizione aperta, come se la chiudessi domani: la data resta sempre domani (come =OGGI()+1 nell'Excel)">
+            <input id="i-domani" type="checkbox"> Sempre domani
+          </label>
           <input id="i-nome" type="text" list="investimenti-list" placeholder="Nome (es. BTP...)" required autocomplete="off">
           <datalist id="investimenti-list"></datalist>
           <input id="i-posizione" type="number" min="0" step="1" placeholder="ID" title="ID posizione: stesso ID per le operazioni dello stesso investimento" required>
@@ -187,14 +180,14 @@
           <table class="summary-table">
             <thead>
               <tr>
-                <th>Data</th>
-                <th class="num">ID</th>
-                <th>Nome</th>
-                <th>Tipo</th>
-                <th>Operazione</th>
-                <th class="num">Quantità</th>
-                <th class="num">Importo</th>
-                <th>Note</th>
+                <th><button class="sort-button" type="button" data-sort-inv="data">Data<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th class="num"><button class="sort-button" type="button" data-sort-inv="posizione">ID<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-sort-inv="nome">Nome<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-sort-inv="tipo">Tipo<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-sort-inv="operazione">Operazione<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th class="num"><button class="sort-button" type="button" data-sort-inv="quantita">Quantità<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th class="num"><button class="sort-button" type="button" data-sort-inv="importo">Importo<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-sort-inv="note">Note<span class="sort-indicator" aria-hidden="true"></span></button></th>
                 <th></th>
               </tr>
             </thead>
@@ -206,7 +199,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
-    <script src="./assets/config.js?v=2"></script>
-    <script type="module" src="./assets/app.js?v=2"></script>
+    <script src="./assets/config.js?v=10"></script>
+    <script type="module" src="./assets/app.js?v=10"></script>
   </body>
 </html>

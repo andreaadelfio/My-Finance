@@ -46,6 +46,17 @@ create table if not exists public.saldi (
   saldo_iniziale numeric(12, 2) not null
 );
 
+-- Riepilogo per anno (foglio "Pre 2023"): per gli anni senza movimenti dettagliati
+-- (2021, 2022) e i mesi lavorati di ogni anno. Il conto a fine anno si ricava da
+-- saldi (saldo a inizio anno) + entrate - uscite.
+create table if not exists public.riepiloghi_annuali (
+  anno integer primary key,
+  mesi_lavorati numeric(4, 1),
+  entrate numeric(12, 2),
+  uscite numeric(12, 2),
+  note text
+);
+
 -- Registro investimenti (foglio "Investimenti Dashboard"): una riga per operazione.
 -- "posizione" è l'ID dell'Excel: raggruppa le operazioni dello stesso investimento.
 -- importo negativo per "Investimento", positivo per rimborsi, cedole e dividendi.
@@ -65,6 +76,24 @@ create table if not exists public.investimenti (
   note text,
   created_at timestamptz not null default now()
 );
+
+-- Operazioni "domani" (nell'Excel data =OGGI()+1): il valore attuale di una posizione
+-- ancora aperta, come se la si chiudesse domani. Per il sito la loro data è sempre domani,
+-- così i grafici mostrano il passato vero e da domani ciò che accadrà.
+-- La prima volta segna le 10 righe importate dal Portafogli.xlsx con la data fissa
+-- del giorno dell'import (fine settembre 2026).
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'investimenti' and column_name = 'domani'
+  ) then
+    alter table public.investimenti add column domani boolean not null default false;
+    update public.investimenti set domani = true
+    where data between '2026-09-20' and '2026-10-05' and operazione in ('Rimborso', 'Cedola');
+  end if;
+end;
+$$;
 
 -- Mappatura "categoria della banca -> mia categoria", usata quando si importano
 -- gli estratti conto (dal sito con "+ Excel" o con import_excel.py)
@@ -324,7 +353,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['categorie', 'movimenti', 'budget', 'saldi', 'investimenti', 'mappatura_categorie'] loop
+  foreach t in array array['categorie', 'movimenti', 'budget', 'saldi', 'riepiloghi_annuali', 'investimenti', 'mappatura_categorie'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "accesso pubblico" on public.%I', t);
     execute format(
