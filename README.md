@@ -9,8 +9,11 @@ Sostituisce il file Excel `Portafogli.xlsx` per movimenti, budget e riepilogo an
 - `assets/app.js`: tutta la logica del sito.
 - `assets/styles.css`: stile.
 - `assets/config.js`: URL e chiave publishable di Supabase.
-- `supabase/schema.sql`: tabelle `categorie`, `movimenti`, `budget`, `saldi`, `investimenti`, `mappatura_categorie`.
+- `supabase/schema.sql`: tabelle `categorie`, `movimenti`, `budget`, `saldi`, `riepiloghi_annuali`,
+  `investimenti`, `mappatura_categorie`, `quotazioni`, `watchlist`. Si può rieseguire quando
+  cambia: non tocca i dati.
 - `import_excel.py`: carica su Supabase i dati dei file Excel.
+- `backup.py`: copia di tutte le tabelle in un file JSON (`make backup`).
 
 ## Cosa fa
 
@@ -130,8 +133,7 @@ e la posizione è in giallo. Si lancia con "Aggiorna prezzi" nella Dashboard inv
 
 Per pubblicarla (una volta sola):
 
-1. SQL Editor: eseguire solo il `create table ... quotazioni` di `supabase/schema.sql` e
-   le sue regole di accesso (non tutto lo schema: cancellerebbe le categorie senza movimenti).
+1. SQL Editor: eseguire `supabase/schema.sql`.
 2. Edge Functions → Deploy a new function → Via Editor: nome `aggiorna-quotazioni`,
    incollare `index.ts` e pubblicare.
 3. Nelle impostazioni della funzione disattivare "Verify JWT" (il sito usa la chiave
@@ -150,7 +152,20 @@ scelto e quanto pesa la commissione. Gli ISIN si aggiungono e tolgono dalla pagi
 
 L'analisi la fa la stessa Edge Function dei prezzi con `{"azione": "watchlist"}` (bottone
 "Aggiorna analisi"); il pg_cron serale, senza azione, aggiorna prezzi e proposte insieme.
-Per attivarla: eseguire `supabase/watchlist.sql` nell'SQL Editor e ripubblicare la funzione.
+Per attivarla: eseguire `supabase/schema.sql` nell'SQL Editor e ripubblicare la funzione.
+I titoli di ISIN Monitor vengono inseriti solo se la watchlist è vuota: rieseguendo lo
+schema non tornano quelli tolti dal sito.
+
+## Backup
+
+```bash
+make backup    # Windows: .\make backup
+```
+
+Salva tutte le tabelle in `backup/myfinance-backup-AAAA-MM-GG.json` (un file al giorno;
+la cartella è nel `.gitignore`, perché contiene dati personali). Con
+`python3 backup.py <cartella>` lo salva altrove. Conviene farlo ogni tanto e prima di
+modifiche importanti al database.
 
 ## Avvio locale
 

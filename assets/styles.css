@@ -236,6 +236,19 @@ input {
   margin: 1.5rem 0 0.5rem;
 }
 
+/* Titolo con i pulsanti accanto (es. "Operazioni" in Posizioni) */
+.titolo-azioni {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.panel .titolo-azioni h2 {
+  margin: 0 0.5rem 0 0;
+}
+
 .unit {
   font-weight: 400;
   color: var(--ink-soft);

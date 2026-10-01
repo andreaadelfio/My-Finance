@@ -6,6 +6,7 @@
 *.ods
 backup*.json
 myfinance-backup*.json
+backup/
 
 # Supabase CLI
 supabase/.temp/

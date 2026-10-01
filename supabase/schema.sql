@@ -80,20 +80,7 @@ create table if not exists public.investimenti (
 -- Operazioni "domani" (nell'Excel data =OGGI()+1): il valore attuale di una posizione
 -- ancora aperta, come se la si chiudesse domani. Per il sito la loro data è sempre domani,
 -- così i grafici mostrano il passato vero e da domani ciò che accadrà.
--- La prima volta segna le 10 righe importate dal Portafogli.xlsx con la data fissa
--- del giorno dell'import (fine settembre 2026).
-do $$
-begin
-  if not exists (
-    select 1 from information_schema.columns
-    where table_schema = 'public' and table_name = 'investimenti' and column_name = 'domani'
-  ) then
-    alter table public.investimenti add column domani boolean not null default false;
-    update public.investimenti set domani = true
-    where data between '2026-09-20' and '2026-10-05' and operazione in ('Rimborso', 'Cedola');
-  end if;
-end;
-$$;
+alter table public.investimenti add column if not exists domani boolean not null default false;
 
 -- Quotazioni delle posizioni aperte (esclusi i BTP), scritte dalla Edge Function
 -- "aggiorna-quotazioni": prezzo di oggi da Yahoo Finance, quote, costo, valore se si
@@ -159,8 +146,10 @@ create table if not exists public.watchlist (
   aggiunto_il timestamptz not null default now()
 );
 
--- I titoli di ISIN Monitor (isin_metadata.csv), con il simbolo Yahoo
-insert into public.watchlist (isin, simbolo, nome, settore) values
+-- I titoli di ISIN Monitor (isin_metadata.csv), con il simbolo Yahoo: solo se la watchlist
+-- è vuota, così rieseguendo lo schema non tornano i titoli tolti dal sito
+insert into public.watchlist (isin, simbolo, nome, settore)
+select * from (values
   ('NL0011585146', 'RACE.MI', 'Ferrari N.V.', 'Consumer Cyclical'),
   ('US0231351067', 'AMZN', 'Amazon.com, Inc.', 'Consumer Cyclical'),
   ('IT0003497168', 'TIT.MI', 'Telecom Italia S.p.A.', 'Communication Services'),
@@ -178,6 +167,8 @@ insert into public.watchlist (isin, simbolo, nome, settore) values
   ('IT0003132476', 'ENI.MI', 'Eni S.p.A.', 'Energy'),
   ('US67066G1040', 'NVDA', 'NVIDIA Corporation', 'Technology'),
   ('US0079031078', 'AMD', 'Advanced Micro Devices, Inc.', 'Technology')
+) as titoli (isin, simbolo, nome, settore)
+where not exists (select 1 from public.watchlist)
 on conflict (isin) do nothing;
 
 -- Mappatura "categoria della banca -> mia categoria", usata quando si importano
@@ -450,59 +441,9 @@ begin
 end;
 $$;
 
--- Mappatura iniziale, ricavata da come erano state ricategorizzate le voci della
--- banca nell'Excel (gennaio 2026) e dalle categorie rinominate negli anni.
--- Non sovrascrive le modifiche fatte dal sito.
-insert into public.mappatura_categorie (categoria_banca, categoria_id)
-select m.banca, c.id
-from (values
-  ('Trasporti, noleggi, taxi e parcheggi', 'Trasporti varie'),
-  ('Farmacia', 'Spese mediche e Farmacia'),
-  ('Pagamento affitti', 'Spese condominiali e affitti'),
-  ('Imposte, bolli e commissioni', 'Altre uscite'),
-  ('Tabaccai e simili', 'Generi alimentari e supermercato'),
-  ('Pedaggi e Telepass', 'Tempo libero varie'),
-  ('Addebiti vari', 'Tempo libero varie'),
-  ('Imposte sul reddito e tasse varie', 'Spese mediche e Farmacia'),
-  ('Corsi e Istruzioni', 'Corsi e Istruzione'),
-  ('Investimenti, BDR e XME Salvadanaio', 'Investimenti, BDR e Salvadanaio')
-) as m (banca, mia)
-join public.categorie c on c.nome = m.mia and c.tipo = 'uscita'
-on conflict (categoria_banca) do nothing;
-
--- Applica una volta la mappatura a tutti i movimenti già presenti, dopo aver copiato
--- i budget delle categorie della banca su quelle mappate (dove mancano)
-insert into public.budget (categoria_id, anno, importo_mensile)
-select distinct on (m.categoria_id, b.anno) m.categoria_id, b.anno, b.importo_mensile
-from public.budget b
-join public.categorie c on c.id = b.categoria_id
-join public.mappatura_categorie m on m.categoria_banca = c.nome
-where m.categoria_id <> c.id and b.importo_mensile > 0
-order by m.categoria_id, b.anno, b.importo_mensile desc
-on conflict (categoria_id, anno) do nothing;
-
-update public.movimenti mv
-set categoria_id = m.categoria_id
-from public.categorie c
-join public.mappatura_categorie m on m.categoria_banca = c.nome
-where mv.categoria_id = c.id
-  and m.categoria_id <> c.id;
-
--- Riempie il nome della categoria nelle righe già presenti
-update public.budget b set categoria = c.nome
-from public.categorie c where c.id = b.categoria_id and b.categoria is distinct from c.nome;
-update public.movimenti mv set categoria = c.nome
-from public.categorie c where c.id = mv.categoria_id and mv.categoria is distinct from c.nome;
-update public.mappatura_categorie m set categoria = c.nome
-from public.categorie c where c.id = m.categoria_id and m.categoria is distinct from c.nome;
-
--- Cancella una volta le categorie che oggi non hanno movimenti (e i loro budget)
-delete from public.categorie c
-where not exists (select 1 from public.movimenti mv where mv.categoria_id = c.id)
-  and not exists (select 1 from public.mappatura_categorie m where m.categoria_id = c.id);
-
--- Righe di budget dell'anno in corso per tutte le categorie di uscita (a 0 se mancano)
-select public.copia_budget_anno(extract(year from now())::integer);
+-- (Le operazioni una tantum della migrazione dall'Excel, cioè mappatura iniziale,
+-- rimappatura dei movimenti, nomi delle categorie e pulizia delle categorie vuote, sono
+-- già state eseguite e sono state tolte: ora le fanno i trigger qui sopra.)
 
 -- Permette le somme nelle query (totali della lista movimenti e del riepilogo)
 alter role authenticator set pgrst.db_aggregates_enabled = 'true';

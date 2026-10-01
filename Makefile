@@ -8,10 +8,14 @@ all: git
 ifeq ($(OS),Windows_NT)
 PS = powershell -NoProfile -ExecutionPolicy Bypass -File make-windows.ps1
 
-git dev stop:
+git dev stop backup:
 	@$(PS) $@ -Port $(PORT) -HostName $(HOST) -SiteDir "$(SITE_DIR)"
 
 else
+
+# Copia di tutte le tabelle in backup/myfinance-backup-AAAA-MM-GG.json
+backup:
+	python3 backup.py
 
 git:
 	git add --all
@@ -38,4 +42,4 @@ stop:
 
 endif
 
-.PHONY: all git dev stop
+.PHONY: all git dev stop backup

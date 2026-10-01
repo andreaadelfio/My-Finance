@@ -70,10 +70,10 @@ class Supabase:
             raise SystemExit(f"Errore Supabase {error.code} su {path}: {error.read().decode()}") from None
         return json.loads(raw) if raw else None
 
-    def select_all(self, table, columns="*"):
+    def select_all(self, table, columns="*", order="id"):
         rows, offset = [], 0
         while True:
-            page = self.request("GET", f"{table}?select={columns}&order=id&limit=1000&offset={offset}")
+            page = self.request("GET", f"{table}?select={columns}&order={order}&limit=1000&offset={offset}")
             rows += page
             if len(page) < 1000:
                 return rows

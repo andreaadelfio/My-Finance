@@ -1,6 +1,6 @@
-﻿# Equivalente Windows del Makefile: .\make dev | .\make stop | .\make git
+﻿# Equivalente Windows del Makefile: .\make dev | .\make stop | .\make git | .\make backup
 param(
-  [ValidateSet("all", "dev", "stop", "git")]
+  [ValidateSet("all", "dev", "stop", "git", "backup")]
   [string]$Target = "all",
   [int]$Port = 8002,
   [string]$HostName = "127.0.0.1",
@@ -49,5 +49,6 @@ function Invoke-Git {
 switch ($Target) {
   "dev"  { Invoke-Dev }
   "stop" { Invoke-Stop }
+  "backup" { python "$PSScriptRoot\backup.py" }
   default { Invoke-Git }
 }

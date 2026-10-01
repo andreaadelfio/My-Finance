@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=20">
+    <link rel="stylesheet" href="./assets/styles.css?v=21">
   </head>
   <body>
     <div class="page-shell">
@@ -167,10 +167,6 @@
 
       <!-- INVESTIMENTI: registro delle operazioni -->
       <section id="view-investimenti" class="panel hidden">
-        <div class="toolbar">
-          <button id="i-nuova" class="primary-button" type="button" title="Aggiunge in cima alla tabella una riga da compilare (Invio salva, Esc annulla)">+ Nuova operazione</button>
-          <button class="secondary-button aggiorna-prezzi" type="button" title="Prende da Yahoo Finance i prezzi di oggi e ricalcola la plusvalenza se vendessi domani (esclusi i BTP)">Aggiorna prezzi</button>
-        </div>
         <datalist id="investimenti-list"></datalist>
         <datalist id="tipi-list"></datalist>
 
@@ -185,7 +181,11 @@
           <p id="inv-totali" class="totali"></p>
         </div>
 
-        <h2>Operazioni</h2>
+        <div class="titolo-azioni">
+          <h2>Operazioni</h2>
+          <button id="i-nuova" class="primary-button" type="button" title="Aggiunge in cima alla tabella una riga da compilare (Invio salva, Esc annulla)">+ Nuova operazione</button>
+          <button class="secondary-button aggiorna-prezzi" type="button" title="Prende da Yahoo Finance i prezzi di oggi e ricalcola la plusvalenza se vendessi domani (esclusi i BTP)">Aggiorna prezzi</button>
+        </div>
         <div class="table-wrap">
           <table class="summary-table">
             <thead>
