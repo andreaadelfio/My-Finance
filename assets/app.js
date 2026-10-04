@@ -19,6 +19,8 @@ const state = {
   quotazioni: new Map(), // posizione -> prezzo di oggi e plusvalenza (Edge Function "aggiorna-quotazioni")
   fineco: null, // conto Fineco: { tipi: Map(tipo -> somma), liquidita, ultimaData }
   costiFineco: [], // costi e interessi del conto Fineco, come righe (sola lettura) del registro
+  contoOggi: null, // saldo del conto Intesa a oggi: saldo a inizio anno + movimenti dell'anno
+  usciteMese: [], // uscite del mese in corso per categoria: [{ categoria_id, speso }]
   importFineco: null, // anteprima dell'estratto Fineco in corso di importazione
   watchlist: [], // titoli della sezione Proposte con segnale e motivi (senza lo storico, caricato a richiesta)
   graficoProposta: null, // ISIN con il grafico aperto nella sezione Proposte
@@ -43,6 +45,9 @@ const elements = {
   viewDashboard: document.querySelector("#view-dashboard"),
   toggleButtons: [...document.querySelectorAll(".toggle-button")],
   tortaCategorie: document.querySelector("#torta-categorie"),
+  patrimonio: document.querySelector("#patrimonio"),
+  questoMeseTitolo: document.querySelector("#questo-mese-titolo"),
+  questoMeseLista: document.querySelector("#questo-mese-lista"),
   titoloGraficoLinee: document.querySelector("#titolo-grafico-linee"),
   titoloGraficoCategorie: document.querySelector("#titolo-grafico-categorie"),
   saldoField: document.querySelector("#saldo-field"),
@@ -255,6 +260,20 @@ async function loadData() {
     plusvalenza: numero(q.plusvalenza)
   }]));
 
+  // Conto Intesa a oggi (saldo a inizio anno + movimenti dell'anno) e uscite del mese in corso
+  // per categoria, indipendenti dall'anno scelto nella Dashboard
+  const adesso = new Date();
+  const [movimentiAnno, usciteMese] = await Promise.all([
+    state.supabase.from("movimenti").select("importo.sum()").eq("anno", adesso.getFullYear()),
+    state.supabase.from("movimenti").select("categoria_id,importo.sum()")
+      .eq("anno", adesso.getFullYear()).eq("mese", adesso.getMonth() + 1).lt("importo", 0)
+  ]);
+  if (movimentiAnno.error) throw movimentiAnno.error;
+  if (usciteMese.error) throw usciteMese.error;
+  const saldoInizio = saldi.find((s) => s.anno === adesso.getFullYear());
+  state.contoOggi = saldoInizio ? round2(Number(saldoInizio.saldo_iniziale) + Number(movimentiAnno.data[0]?.sum || 0)) : null;
+  state.usciteMese = usciteMese.data.map((r) => ({ categoria_id: r.categoria_id, speso: -Number(r.sum) }));
+
   // Conto Fineco: totali per tipo sommati dal database (anche questa tabella è facoltativa)
   const fineco = await state.supabase.from("movimenti_fineco").select("tipo,importo.sum(),data.max()");
   const perTipo = fineco.data || [];
@@ -382,7 +401,7 @@ function applyFilters(query) {
     query = parti.length ? query.or(parti.join(",")).lt("importo", 0) : query.eq("id", -1);
   }
   else if (categoria) query = query.eq("categoria_id", Number(categoria));
-  if (testo) query = query.or(`operazione.ilike.*${testo}*,dettagli.ilike.*${testo}*,note.ilike.*${testo}*`);
+  if (testo) query = query.or(`operazione.ilike.*${testo}*,dettagli.ilike.*${testo}*,categoria.ilike.*${testo}*,note.ilike.*${testo}*`);
   return query;
 }
 
@@ -820,6 +839,11 @@ function renderImportPanel() {
     <p>${imp.totale} movimenti nel file (dal ${formatDate(imp.dal)} al ${formatDate(imp.al)}):
       <strong>${imp.nuovi.length} nuovi</strong>, ${imp.totale - imp.nuovi.length} già presenti (saltati).
       Nuove entrate <strong class="positive">${formatEuro(entrate)}</strong>, nuove uscite <strong class="negative">${formatEuro(uscite)}</strong>.</p>
+    <p class="controllo-saldo">
+      <label>Controllo (facoltativo): saldo contabile di oggi nell'app Intesa
+        <input id="import-saldo" type="text" inputmode="decimal" placeholder="es. 1.234,56" autocomplete="off"> €</label>
+      <span id="import-saldo-esito" class="hint"></span>
+    </p>
     ${imp.daDecidere.size ? `
       <p class="hint">Categorie della banca senza corrispondenza: scegli a quale tua categoria associarle.
         La scelta viene salvata nella mappatura e usata anche le prossime volte.</p>
@@ -844,6 +868,31 @@ function renderImportPanel() {
     </div>`;
   elements.importPanel.classList.remove("hidden");
   elements.importPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Saldo del conto dopo l'import (saldo a inizio anno + movimenti dell'anno + quelli nuovi
+// dell'anno nel file) confrontato con quello scritto dall'app Intesa: una differenza vuol dire
+// movimenti mancanti o doppi
+function controllaSaldoImport() {
+  const scritto = parseAmount(document.querySelector("#import-saldo").value);
+  const esito = document.querySelector("#import-saldo-esito");
+  if (scritto === null || document.querySelector("#import-saldo").value.trim() === "") {
+    esito.textContent = "";
+    return;
+  }
+  if (state.contoOggi === null) {
+    esito.innerHTML = '<span class="negative">manca il saldo a inizio anno: non posso confrontare</span>';
+    return;
+  }
+  const anno = String(new Date().getFullYear());
+  const nuovi = state.importazione.nuovi.filter((m) => m.data.startsWith(anno)).reduce((s, m) => s + m.importo, 0);
+  const calcolato = round2(state.contoOggi + nuovi);
+  const differenza = round2(scritto - calcolato);
+  esito.innerHTML = Math.abs(differenza) < 0.01
+    ? `<span class="positive">✓ uguale al saldo calcolato (${formatEuro(calcolato)})</span>`
+    : `<span class="negative">saldo calcolato ${formatEuro(calcolato)}: differenza ${formatEuro(differenza)}
+        (${differenza > 0 ? "mancano entrate o ci sono uscite di troppo" : "mancano uscite o ci sono entrate di troppo"};
+        controlla anche i movimenti non ancora contabilizzati)</span>`;
 }
 
 async function confermaImportazione() {
@@ -1282,8 +1331,78 @@ function renderDashboard() {
   elements.saldoValore.textContent = saldo === undefined ? "—" : formatEuro(saldo);
   elements.titoloPeriodo.textContent = tuttiGliAnni() ? "Andamento annuale" : "Andamento mensile";
   renderAndamento();
+  renderPatrimonio();
+  renderQuestoMese();
   if (tipo === "sintesi") renderCharts();
   else renderCategorieCharts(tipo);
+}
+
+// Valore a oggi degli investimenti ancora aperti: a prezzo di mercato se c'è la quotazione,
+// altrimenti (BTP, E2C, ...) il capitale ancora investito (acquisti meno rimborsi già avvenuti)
+function valoreInvestimenti() {
+  const oggi = todayISO();
+  let totale = 0;
+  for (const posizione of new Set(state.investimenti.map((r) => r.posizione))) {
+    if (statoPosizione(posizione).stato === "chiusa") continue;
+    const quotazione = state.quotazioni.get(posizione);
+    if (quotazione?.valore != null && !quotazione.errore) {
+      totale += quotazione.valore;
+      continue;
+    }
+    const passate = state.investimenti.filter((r) => r.posizione === posizione && !r.domani && r.data <= oggi);
+    const investito = passate.filter((r) => r.operazione === "Investimento").reduce((s, r) => s - r.importo, 0);
+    const rimborsato = passate.filter((r) => r.operazione === "Rimborso").reduce((s, r) => s + r.importo, 0);
+    totale += Math.max(0, investito - rimborsato);
+  }
+  return round2(totale);
+}
+
+// Patrimonio a oggi: conto Intesa + liquidità Fineco + investimenti aperti
+function renderPatrimonio() {
+  const parti = [];
+  if (state.contoOggi !== null) parti.push(["conto Intesa", state.contoOggi]);
+  if (state.fineco) parti.push(["liquidità Fineco", state.fineco.liquidita]);
+  const investimenti = valoreInvestimenti();
+  if (investimenti) parti.push(["investimenti", investimenti]);
+  elements.patrimonio.classList.toggle("hidden", !parti.length);
+  const totale = round2(parti.reduce((s, [, valore]) => s + valore, 0));
+  elements.patrimonio.innerHTML = `Patrimonio oggi <strong>${formatEuro(totale)}</strong>
+    <span class="patrimonio-parti">= ${parti.map(([nome, valore]) => `${nome} ${formatEuro(valore)}`).join(" + ")}</span>
+    <span class="hint-breve" title="Investimenti aperti a prezzo di mercato (Aggiorna prezzi); BTP, E2C e quelli senza quotazione al capitale ancora investito">ⓘ</span>`;
+}
+
+// Questo mese: per ogni categoria di uscita, speso finora e budget mensile, dalla più "consumata".
+// Barra rossa oltre il budget, gialla se si spende più in fretta del mese che passa.
+function renderQuestoMese() {
+  const adesso = new Date();
+  const anno = adesso.getFullYear();
+  const mese = adesso.getMonth() + 1;
+  const giorniMese = new Date(anno, mese, 0).getDate();
+  const ritmo = adesso.getDate() / giorniMese; // parte del mese già passata
+  const spese = new Map(state.usciteMese.map((r) => [r.categoria_id ?? "nessuna", r.speso]));
+  const righe = categorieDelTipo("uscita")
+    .map((c) => ({ id: c.id, nome: c.nome, speso: round2(spese.get(c.id) || 0), budget: budgetFor(c.id, anno) }))
+    .filter((r) => r.speso > 0 || r.budget);
+  if (spese.has("nessuna")) righe.push({ id: "nessuna", nome: "Senza categoria", speso: round2(spese.get("nessuna")), budget: null });
+  const quota = (r) => (r.budget ? r.speso / r.budget : r.speso > 0 ? Infinity : 0);
+  righe.sort((a, b) => quota(b) - quota(a) || b.speso - a.speso);
+
+  const speso = round2(righe.reduce((s, r) => s + r.speso, 0));
+  const budget = round2(righe.reduce((s, r) => s + (r.budget || 0), 0));
+  const nomeMese = adesso.toLocaleString("it-IT", { month: "long" });
+  elements.questoMeseTitolo.innerHTML = `<strong>Questo mese</strong> (${nomeMese}, giorno ${adesso.getDate()} di ${giorniMese}):
+    speso <strong>${formatEuro(speso)}</strong>${budget ? ` su ${formatEuro(budget)} di budget (${Math.round((speso / budget) * 100)}%)` : ""}`;
+  elements.questoMeseLista.innerHTML = righe.map((r) => {
+    const q = quota(r);
+    const colore = !r.budget ? "senza" : q > 1 ? "oltre" : q > ritmo ? "veloce" : "ok";
+    const larghezza = r.budget ? Math.min(100, Math.round(q * 100)) : 100;
+    return `
+      <div class="mese-riga clickable" data-anno="${anno}" data-mese="${mese - 1}" data-categoria="${r.id}" title="Vedi i movimenti">
+        <span class="mese-nome">${escapeHtml(r.nome)}</span>
+        <span class="mese-barra"><i class="${colore}" style="width:${larghezza}%"></i></span>
+        <span class="mese-valori">${formatNumber(r.speso)}${r.budget ? ` / ${formatNumber(r.budget)}` : ' <span class="zero">senza budget</span>'}</span>
+      </div>`;
+  }).join("") || '<p class="hint">Nessuna spesa questo mese.</p>';
 }
 
 // ---------------------------------------------------------------------------
@@ -2526,7 +2645,9 @@ async function rimuoviDallaWatchlist(isin) {
 // porta alle operazioni, perché lì il tocco sul nome apre e chiude la scheda.
 function etichettaColonne(table) {
   const titoli = [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim());
-  table.querySelectorAll("tbody tr").forEach((tr) => {
+  // la riga dei totali (tfoot) resta sempre aperta
+  table.querySelectorAll("tfoot tr").forEach((tr) => tr.classList.add("aperta"));
+  table.querySelectorAll("tbody tr, tfoot tr").forEach((tr) => {
     [...tr.children].forEach((cella, i) => {
       if (titoli[i]) cella.dataset.label = titoli[i];
     });
@@ -2633,6 +2754,7 @@ function renderInvestimenti() {
     <thead><tr><th>Tipo</th><th class="num">Capitale impegnato</th><th class="num">Capitale maturato</th><th class="num">Risultato</th><th class="num">Rend. %</th></tr></thead>
     <tbody>${tipiRows}</tbody>
     <tfoot>${tipoRow("Totale", totale)}</tfoot>`;
+  etichettaColonne(elements.tipiTable);
 
   const oggi = todayISO();
   // Il registro mostra sempre tutte le operazioni, anche quelle future (in corsivo)
@@ -2658,27 +2780,27 @@ function renderInvestimenti() {
   renderSortIndicators(elements.sortButtonsInv, "sortInv", state.ordinamentoInv);
   const rigaFineco = (riga) => `
     <tr class="riga-fineco" title="Dal conto Fineco: si aggiorna con + Excel Fineco">
-      <td>${formatDate(riga.data)}</td>
-      <td class="num"><span class="zero">—</span></td>
-      <td>${escapeHtml(riga.nome)}</td>
-      <td>${escapeHtml(riga.tipo)}</td>
-      <td>${escapeHtml(riga.operazione)}</td>
-      <td></td><td></td>
-      <td class="num ${riga.importo < 0 ? "negative" : "positive"}">${formatNumber(riga.importo)}</td>
-      <td>${escapeHtml(riga.note || "")}</td>
-      <td></td>
+      <td data-label="Data">${formatDate(riga.data)}</td>
+      <td data-label="ID" class="num"><span class="zero">—</span></td>
+      <td data-label="Nome">${escapeHtml(riga.nome)}</td>
+      <td data-label="Tipo">${escapeHtml(riga.tipo)}</td>
+      <td data-label="Operazione">${escapeHtml(riga.operazione)}</td>
+      <td data-label="Quantità"></td><td data-label="ABP"></td>
+      <td data-label="Importo" class="num ${riga.importo < 0 ? "negative" : "positive"}">${formatNumber(riga.importo)}</td>
+      <td data-label="Note">${escapeHtml(riga.note || "")}</td>
+      <td class="actions"></td>
     </tr>`;
   elements.operazioniBody.innerHTML = (state.editingInvestimentoId === "nuova" ? rigaInvestimentoInModifica(null) : "") + operazioni.map((riga) => (riga.fineco ? rigaFineco(riga) : riga.id === state.editingInvestimentoId ? rigaInvestimentoInModifica(riga) : `
     <tr class="${riga.data > oggi ? "future" : ""} ${riga === ultima ? "ultima" : ""} ${riga.domani && daControllare(riga.posizione) ? "da-controllare" : ""}" ${riga.domani && daControllare(riga.posizione) ? titoloQuotazione(riga.posizione) : riga === ultima ? 'title="Ultima operazione avvenuta"' : riga.domani ? 'title="Valore attuale: la data è sempre domani (come =OGGI()+1 nell\'Excel)"' : riga.data > oggi ? 'title="Operazione prevista"' : ""}>
-      <td>${formatDate(riga.data)}</td>
-      <td class="num">${riga.posizione}</td>
-      <td>${escapeHtml(riga.nome)}</td>
-      <td>${escapeHtml(riga.tipo || "")}</td>
-      <td>${escapeHtml(riga.operazione)}</td>
-      <td class="num">${formatQuantity(riga.quantita)}</td>
-      <td class="num">${riga.abp === null ? "" : formatQuantity(riga.abp)}</td>
-      <td class="num ${riga.importo < 0 ? "negative" : "positive"}">${formatNumber(riga.importo)}</td>
-      <td>${escapeHtml(riga.note || "")}</td>
+      <td data-label="Data">${formatDate(riga.data)}</td>
+      <td data-label="ID" class="num">${riga.posizione}</td>
+      <td data-label="Nome">${escapeHtml(riga.nome)}</td>
+      <td data-label="Tipo">${escapeHtml(riga.tipo || "")}</td>
+      <td data-label="Operazione">${escapeHtml(riga.operazione)}</td>
+      <td data-label="Quantità" class="num">${formatQuantity(riga.quantita)}</td>
+      <td data-label="ABP" class="num">${riga.abp === null ? "" : formatQuantity(riga.abp)}</td>
+      <td data-label="Importo" class="num ${riga.importo < 0 ? "negative" : "positive"}">${formatNumber(riga.importo)}</td>
+      <td data-label="Note">${escapeHtml(riga.note || "")}</td>
       <td class="actions">
         <button class="icon-button" type="button" data-action="inv-edit" data-id="${riga.id}" title="Modifica" aria-label="Modifica">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
@@ -2834,7 +2956,7 @@ function rigaInvestimentoInModifica(riga) {
           <input type="checkbox" data-campo="domani" ${r.domani ? "checked" : ""}> Sempre domani
         </label>
       </td>
-      <td class="num">${campo("posizione", r.posizione, 'type="number" min="0" step="1" aria-label="ID posizione" title="Stesso ID per le operazioni dello stesso investimento"', "riga-input num-input")}</td>
+      <td class="num">${campo("posizione", r.posizione, 'type="number" min="0" step="1" aria-label="ID posizione" placeholder="ID" title="Stesso ID per le operazioni dello stesso investimento"', "riga-input num-input")}</td>
       <td>
         ${campo("nome", r.nome, 'type="text" list="investimenti-list" aria-label="Nome" placeholder="Nome (es. BTP...)"')}
         ${campo("isin", r.isin, 'type="text" aria-label="ISIN" placeholder="ISIN"', secondario)}
@@ -2875,7 +2997,15 @@ function filtraInvestimenti(righe) {
     (!f.operazione || r.operazione === f.operazione) &&
     (!f.tipo || (r.tipo || "") === f.tipo) &&
     (!f.anno || r.data.startsWith(f.anno)) &&
-    (!testo || normalize(`${r.nome} ${r.isin || ""} ${r.note || ""}`).includes(testo)));
+    (!testo || testoRicerca(r).includes(testo)));
+}
+
+// La ricerca cerca in tutto: nome, ISIN, prodotto, tipo, operazione, ID, data, importo, note
+function testoRicerca(r) {
+  return normalize([
+    r.nome, r.isin, r.prodotto, r.tipo, r.operazione, r.posizione, formatDate(r.data),
+    formatNumber(r.importo), String(Math.abs(r.importo)).replace(".", ","), r.note
+  ].filter((v) => v !== null && v !== undefined).join(" "));
 }
 
 function renderFiltriInv() {
@@ -2895,6 +3025,15 @@ function renderFiltriInv() {
   elements.invFiltri.anno.innerHTML = opzioni("Tutti gli anni",
     [...new Set(tutte.map((r) => r.data.slice(0, 4)))].sort().reverse().map((a) => [a, a]), f.anno);
   if (elements.invFiltri.testo.value !== f.testo) elements.invFiltri.testo.value = f.testo;
+  // Telefono: i filtri avanzati si aprono da soli se uno è impostato (es. dalla freccia di una posizione)
+  if (f.posizione !== "" || f.stato || f.operazione || f.tipo || f.anno) apriFiltriAvanzati("inv-filtri", true);
+}
+
+// Telefono: le tendine dei filtri (Movimenti e Posizioni) compaiono con "Avanzate"
+function apriFiltriAvanzati(id, aperti) {
+  const contenitore = document.getElementById(id);
+  contenitore.classList.toggle("avanzate-aperte", aperti);
+  contenitore.querySelector(".filtri-avanzate-pulsante").setAttribute("aria-expanded", String(aperti));
 }
 
 // Link dalla Dashboard investimenti: apre il registro filtrato su una posizione o un tipo
@@ -3064,6 +3203,7 @@ function openMovimentiFiltrati(anno, mese, categoria) {
   elements.filterMese.value = mese ?? "";
   elements.filterCategoria.value = categoria;
   elements.filterTesto.value = "";
+  if (anno || mese || categoria) apriFiltriAvanzati("mov-filtri", true);
   showView("movimenti");
   window.scrollTo(0, 0);
   loadMovimentiPage(true);
@@ -3110,8 +3250,13 @@ function bindEvents() {
     if (event.key === "Escape") annullaModifica();
   });
 
+  document.querySelectorAll(".filtri-avanzate-pulsante").forEach((pulsante) => pulsante.addEventListener("click", () => {
+    const id = pulsante.dataset.filtri;
+    apriFiltriAvanzati(id, !document.getElementById(id).classList.contains("avanzate-aperte"));
+  }));
+
   // Schede a tendina delle sintesi (solo telefono): in fase di cattura, prima dei link
-  [elements.posizioniTable, elements.mercatoTable].forEach((table) => table.addEventListener("click", apriChiudiScheda, true));
+  [elements.posizioniTable, elements.mercatoTable, elements.tipiTable].forEach((table) => table.addEventListener("click", apriChiudiScheda, true));
 
   // Estratto conto Fineco (Posizioni)
   elements.finecoButton.addEventListener("click", () => elements.finecoInput.click());
@@ -3143,6 +3288,9 @@ function bindEvents() {
 
   elements.excelButton.addEventListener("click", () => elements.excelInput.click());
   elements.excelInput.addEventListener("change", () => handleExcelFile(elements.excelInput.files[0]));
+  elements.importPanel.addEventListener("input", (event) => {
+    if (event.target.id === "import-saldo") controllaSaldoImport();
+  });
   elements.importPanel.addEventListener("click", (event) => {
     if (event.target.id === "import-confirm") confermaImportazione();
     if (event.target.id === "import-cancel") {
@@ -3301,3 +3449,10 @@ async function init() {
 }
 
 init();
+
+// Service worker (come in Listino Prezzi): permette di installare il sito come app da Chrome
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register("./service-worker.js", { scope: "./" }).catch((error) => {
+    console.warn("Registrazione service worker fallita:", error);
+  });
+}

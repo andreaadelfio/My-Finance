@@ -236,19 +236,6 @@ input {
   margin: 1.5rem 0 0.5rem;
 }
 
-/* Titolo con i pulsanti accanto (es. "Operazioni" in Posizioni) */
-.titolo-azioni {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 1.5rem 0 0.5rem;
-}
-
-.panel .titolo-azioni h2 {
-  margin: 0 0.5rem 0 0;
-}
-
 .unit {
   font-weight: 400;
   color: var(--ink-soft);
@@ -279,8 +266,9 @@ input {
 
 
 
-#filter-testo {
-  flex: 0 1 220px;
+#filter-testo,
+#inv-filtro-testo {
+  flex: 0 1 340px;
 }
 
 .totali {
@@ -1196,11 +1184,12 @@ tr.editing .check-field {
   }
 
   .tabella-schede,
-  .tabella-schede tbody {
+  .tabella-schede tbody,
+  .tabella-schede tfoot {
     display: block;
   }
 
-  .tabella-schede tbody tr {
+  .tabella-schede :is(tbody, tfoot) tr {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 0.15rem 0.8rem;
@@ -1208,7 +1197,7 @@ tr.editing .check-field {
     border-bottom: 1px solid var(--line);
   }
 
-  .summary-table.tabella-schede tbody tr > * {
+  .summary-table.tabella-schede :is(tbody, tfoot) tr > * {
     display: flex;
     justify-content: space-between;
     gap: 0.4rem;
@@ -1219,7 +1208,7 @@ tr.editing .check-field {
     white-space: nowrap;
   }
 
-  .summary-table.tabella-schede tbody tr > :first-child {
+  .summary-table.tabella-schede :is(tbody, tfoot) tr > :first-child {
     grid-column: 1 / -1;
     font-size: 0.95rem;
     margin-bottom: 0.2rem;
@@ -1227,7 +1216,7 @@ tr.editing .check-field {
   }
 
   /* l'etichetta si accorcia con i puntini se non c'è posto; il valore resta intero */
-  .tabella-schede tbody tr > :not(:first-child)::before {
+  .tabella-schede :is(tbody, tfoot) tr > :not(:first-child)::before {
     content: attr(data-label);
     min-width: 0;
     overflow: hidden;
@@ -1238,36 +1227,36 @@ tr.editing .check-field {
   }
 
   /* celle vuote (es. durata della riga Conto Fineco): non occupano spazio */
-  .tabella-schede tbody tr > :empty {
+  .tabella-schede :is(tbody, tfoot) tr > :empty {
     display: none;
   }
 
   /* Schede a tendina: chiuse mostrano solo il nome (e lo stato); un tocco le apre */
-  .tabella-schede tbody tr {
+  .tabella-schede :is(tbody, tfoot) tr {
     cursor: pointer;
   }
 
-  .tabella-schede tbody tr:not(.aperta) > :not(:first-child):not([data-label="Stato"]) {
+  .tabella-schede :is(tbody, tfoot) tr:not(.aperta) > :not(:first-child):not([data-label="Stato"]) {
     display: none;
   }
 
-  .tabella-schede tbody tr:not(.aperta) > :first-child {
+  .tabella-schede :is(tbody, tfoot) tr:not(.aperta) > :first-child {
     margin-bottom: 0;
   }
 
-  .tabella-schede tbody tr > :first-child::before {
+  .tabella-schede :is(tbody, tfoot) tr > :first-child::before {
     content: "▸";
     flex: none;
     width: 1rem;
     color: var(--ink-soft);
   }
 
-  .summary-table.tabella-schede tbody tr > :first-child {
+  .summary-table.tabella-schede :is(tbody, tfoot) tr > :first-child {
     justify-content: flex-start;
     gap: 0.2rem;
   }
 
-  .tabella-schede tbody tr.aperta > :first-child::before {
+  .tabella-schede :is(tbody, tfoot) tr.aperta > :first-child::before {
     content: "▾";
   }
 
@@ -1286,13 +1275,13 @@ tr.editing .check-field {
     font-weight: 400;
   }
 
-  .summary-table.tabella-schede tbody tr > [data-label="Stato"] {
+  .summary-table.tabella-schede :is(tbody, tfoot) tr > [data-label="Stato"] {
     display: none;
   }
 
   /* Sul telefono il nome apre e chiude la scheda: non deve sembrare un link */
-  .summary-table.tabella-schede tbody tr > .clickable:first-child,
-  .summary-table.tabella-schede tbody tr > .clickable:first-child:hover {
+  .summary-table.tabella-schede :is(tbody, tfoot) tr > .clickable:first-child,
+  .summary-table.tabella-schede :is(tbody, tfoot) tr > .clickable:first-child:hover {
     text-decoration: none;
   }
 
@@ -1316,4 +1305,200 @@ tr.editing .check-field {
 /* Fuori dalle schede (computer) lo stato duplicato nel nome non si vede */
 .solo-schede {
   display: none;
+}
+
+/* Posizioni e mercato: il nome può andare a capo, così la tabella sta nello schermo */
+#posizioni-table tbody th:first-child,
+#mercato-table tbody th:first-child {
+  white-space: normal;
+  min-width: 9rem;
+}
+
+/* Testi diversi per computer e telefono */
+.solo-telefono {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .solo-telefono {
+    display: inline;
+  }
+
+  .solo-pc {
+    display: none;
+  }
+}
+
+/* Telefono: registro Posizioni a schede (come i Movimenti) e filtri avanzati a scomparsa */
+@media (max-width: 720px) {
+  /* Filtri di Movimenti e Posizioni: ricerca a tutta riga, tendine con "Avanzate" */
+  .filters .filtro-avanzato {
+    display: none;
+  }
+
+  .filters.avanzate-aperte .filtro-avanzato {
+    display: block;
+  }
+
+  #filter-testo,
+  #inv-filtro-testo {
+    flex: 1 1 100%;
+  }
+
+  .registro-table thead {
+    display: none;
+  }
+
+  .registro-table,
+  .registro-table tbody {
+    display: block;
+  }
+
+  /* nome e importo / data, ID, tipo e operazione / quantità, ABP, note e pulsanti */
+  .registro-table tbody tr:not(.editing) {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "nome nome nome importo"
+      "data id tipo operazione"
+      "quantita abp note azioni";
+    align-items: center;
+    gap: 0.1rem 0.6rem;
+    padding: 0.5rem 0.25rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .registro-table tbody tr > td {
+    padding: 0;
+    border: 0;
+    font-size: 0.8rem;
+    text-align: left;
+  }
+
+  .registro-table td[data-label="Nome"] { grid-area: nome; font-size: 0.9rem; font-weight: 600; }
+  .registro-table td[data-label="Importo"] { grid-area: importo; font-size: 0.9rem; font-weight: 600; text-align: right; }
+  .registro-table td[data-label="Data"] { grid-area: data; }
+  .registro-table td[data-label="ID"] { grid-area: id; color: var(--ink-soft); }
+  .registro-table td[data-label="ID"]::before { content: "ID "; }
+  .registro-table td[data-label="Tipo"] { grid-area: tipo; color: var(--ink-soft); }
+  .registro-table td[data-label="Operazione"] { grid-area: operazione; text-align: right; }
+  .registro-table td[data-label="Quantità"] { grid-area: quantita; color: var(--ink-soft); }
+  .registro-table td[data-label="Quantità"]:not(:empty)::before { content: "Q. "; }
+  .registro-table td[data-label="ABP"] { grid-area: abp; color: var(--ink-soft); }
+  .registro-table td[data-label="ABP"]:not(:empty)::before { content: "ABP "; }
+  .registro-table td[data-label="Note"] {
+    grid-area: note;
+    overflow: hidden;
+    color: var(--ink-soft);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .registro-table td.actions { grid-area: azioni; }
+
+  /* Riga in modifica: un piccolo modulo su due colonne */
+  .registro-table tbody tr.editing {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0.4rem;
+    padding: 0.6rem 0.25rem;
+  }
+
+  .registro-table tr.editing td {
+    display: block;
+  }
+
+  .registro-table tr.editing input,
+  .registro-table tr.editing select {
+    width: 100%;
+  }
+
+  .registro-table tr.editing td.actions {
+    grid-area: auto;
+    grid-column: 1 / -1;
+    text-align: right;
+  }
+}
+
+/* Dashboard: patrimonio a oggi e spese del mese in corso */
+.patrimonio {
+  margin: 0.75rem 0 0;
+}
+
+.patrimonio strong {
+  font-size: 1.1rem;
+}
+
+.patrimonio-parti {
+  color: var(--ink-soft);
+}
+
+.hint-breve {
+  color: var(--ink-soft);
+  cursor: help;
+}
+
+.questo-mese {
+  margin-top: 0.5rem;
+}
+
+.questo-mese summary {
+  cursor: pointer;
+}
+
+.questo-mese-lista {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  max-width: 760px;
+}
+
+.mese-riga {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(70px, 1fr) 8.5rem;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.mese-nome {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mese-barra {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.mese-barra i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+
+.mese-barra .ok { background: var(--positive); }
+.mese-barra .veloce { background: #d9a520; }
+.mese-barra .oltre { background: var(--negative); }
+.mese-barra .senza { background: #b9b2a6; }
+
+.mese-valori {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Anteprima "+ Excel": controllo del saldo con quello dell'app Intesa */
+.controllo-saldo input {
+  width: 8rem;
+  text-align: right;
+}
+
+.controllo-saldo .hint {
+  display: block;
+  text-align: left;
+  margin-top: 0.3rem;
 }

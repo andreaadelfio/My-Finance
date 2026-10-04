@@ -19,7 +19,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 CARTELLA = Path(__file__).parent
-FILE_DEL_SITO = ("/index.html", "/manifest.webmanifest", "/assets/")
+FILE_DEL_SITO = ("/index.html", "/manifest.webmanifest", "/service-worker.js", "/assets/")
 
 # Motorola edge 50 neo in Chrome: circa 412 x 915 px "CSS" (stima; aprendo /mobile sul
 # telefono la pagina mostra le misure vere, che si impostano con ?w=...&h=...)

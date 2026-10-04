@@ -37,15 +37,21 @@ Sostituisce il file Excel `Portafogli.xlsx` per movimenti, budget e riepilogo an
   mesi con spesa, budget mensile (modificabile nella tabella) e numero di operazioni.
   Con tutti gli anni le tabelle hanno una colonna per anno e i grafici coprono tutti i mesi.
   Le celle rosse superano il budget; cliccando un importo si aprono i movimenti corrispondenti.
-  Il selettore **Uscite / Entrate** (di default Uscite) passa alla vista della "Dashboard Entrate":
-  torta del totale per categoria, una linea per categoria nel tempo e tabella delle entrate.
+  Il selettore **Sintesi / Uscite / Entrate** sceglie il grafico: uscite, entrate, risparmio e
+  saldo, oppure una linea per categoria (con la torta del totale per categoria, chiusa).
+  In cima, indipendenti dall'anno scelto: il **patrimonio oggi** (conto Intesa a oggi +
+  liquidità Fineco + investimenti aperti, a prezzo di mercato o, senza quotazione come BTP ed
+  E2C, al capitale ancora investito) e **Questo mese**: speso e budget per categoria nel mese
+  in corso, con una barra rossa oltre il budget e gialla se si spende più in fretta del mese.
 - **Dashboard investimenti**: come "Investimenti Dashboard": sintesi, grafici, riepilogo per
   posizione e per tipo (con o senza le operazioni future già in calendario). Il grafico
   "Andamento nel tempo" ha l'asse per date e mostra, cumulati, capitale investito, rimborsi,
   cedole e dividendi e il saldo netto (rientrato − investito: sopra zero è guadagno).
-- **Investimenti**: registro di tutte le operazioni (investimenti, rimborsi, cedole, dividendi)
+- **Posizioni**: registro di tutte le operazioni (investimenti, rimborsi, cedole, dividendi)
   con il modulo per aggiungerle, modificarle ed eliminarle; colonne ordinabili. Di default va
-  dal passato al futuro, con in verde l'ultima operazione già avvenuta.
+  dal passato al futuro, con in verde l'ultima operazione già avvenuta. La ricerca cerca in
+  tutto (nome, ISIN, tipo, operazione, ID, data, importo, note); sul telefono gli altri filtri
+  compaiono con "Avanzate" e le operazioni sono schede.
   Le operazioni **"Sempre domani"** (colonna `domani` della tabella `investimenti`, come le
   date `=OGGI()+1` dell'Excel) sono il valore attuale di una posizione ancora aperta, come se
   la chiudessi domani: per il sito la loro data è sempre domani, qualunque data sia scritta
@@ -88,6 +94,9 @@ il sito non scarica tutti i movimenti.
   e l'elenco di quelli che verranno aggiunti. Per le categorie della banca senza
   corrispondenza scegli lì a quale tua categoria associarle (o di crearla); la scelta
   viene ricordata. Poi "Importa".
+  L'export Intesa non riporta il saldo: nell'anteprima si può scrivere il saldo contabile di
+  oggi che mostra l'app Intesa, e il sito lo confronta con quello calcolato dopo l'import
+  (saldo a inizio anno + movimenti dell'anno). Una differenza vuol dire movimenti mancanti o doppi.
 - Oppure dal terminale con `import_excel.py` sullo stesso file.
 
 Un movimento è "già presente" se ha stessa data, importo, operazione e dettagli di uno
@@ -199,6 +208,14 @@ python3 ripristina.py backup/myfinance-backup-AAAA-MM-GG.json investimenti
 Vale per `investimenti`, `movimenti_fineco`, `mappatura_titoli`, `quotazioni`, `watchlist`,
 `saldi` e `riepiloghi_annuali`; categorie, movimenti e budget, legati fra loro, vanno
 ripristinati a mano.
+
+## Installare come app sul telefono
+
+Come Listino Prezzi: aprire il sito in Chrome sul telefono, menu ⋮ → **Installa app** (o
+"Aggiungi a schermata Home"). Si apre a schermo intero dall'icona e si aggiorna da solo a ogni
+pubblicazione. Servono `manifest.webmanifest`, le icone in `assets/` (`icon.svg` e le PNG,
+anche quella "maskable" per Android) e `service-worker.js`, che mette in cache solo
+l'interfaccia (prima la rete): i dati arrivano sempre da Supabase.
 
 ## Avvio locale
 

@@ -6,10 +6,16 @@
     <title>MyFinance</title>
     <meta name="robots" content="noindex, nofollow">
     <meta name="theme-color" content="#3f6d56">
+    <!-- Installabile come app da Chrome (manifest + service-worker.js), come Listino Prezzi -->
+    <meta name="application-name" content="MyFinance">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="MyFinance">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
-    <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=36">
+    <link rel="apple-touch-icon" href="./assets/icon-192.png">
+    <link rel="stylesheet" href="./assets/styles.css?v=40">
   </head>
   <body>
     <div class="page-shell">
@@ -57,12 +63,14 @@
         <div id="import-panel" class="box hidden"></div>
         <div id="mappatura-panel" class="box hidden"></div>
 
-        <div class="filters">
-          <select id="filter-anno" aria-label="Anno"></select>
-          <select id="filter-mese" aria-label="Mese"></select>
-          <select id="filter-categoria" aria-label="Categoria"></select>
-          <input id="filter-testo" type="search" placeholder="Cerca..." autocomplete="off">
+        <!-- Filtri (come in Posizioni): ricerca; sul telefono le tendine compaiono con "Avanzate" -->
+        <div id="mov-filtri" class="filters">
+          <input id="filter-testo" type="search" placeholder="Cerca (operazione, dettagli, categoria, note...)" autocomplete="off">
+          <button class="secondary-button solo-telefono filtri-avanzate-pulsante" type="button" data-filtri="mov-filtri" aria-expanded="false">Avanzate</button>
           <button id="filter-reset" class="secondary-button" type="button" title="Mostra tutti i movimenti">Svuota filtri</button>
+          <select id="filter-anno" class="filtro-avanzato" aria-label="Anno"></select>
+          <select id="filter-mese" class="filtro-avanzato" aria-label="Mese"></select>
+          <select id="filter-categoria" class="filtro-avanzato" aria-label="Categoria"></select>
           <p id="totali" class="totali"></p>
         </div>
 
@@ -103,6 +111,13 @@
             <strong id="saldo-valore" class="saldo-valore"></strong>
           </p>
         </div>
+
+        <!-- Patrimonio a oggi e spese del mese in corso: non dipendono dall'anno scelto -->
+        <p id="patrimonio" class="sintesi patrimonio"></p>
+        <details id="questo-mese" class="questo-mese">
+          <summary id="questo-mese-titolo"></summary>
+          <div id="questo-mese-lista" class="questo-mese-lista"></div>
+        </details>
 
         <div class="charts">
           <div class="chart-box">
@@ -160,20 +175,20 @@
         </div>
 
         <h2>Posizioni aperte a prezzo di mercato <span class="unit">(€)</span></h2>
-        <p class="hint">Se vendessi domani (esclusi i BTP). Quantità e ABP si inseriscono con le operazioni nel registro Investimenti: book value = quote × ABP (senza ABP, la somma degli acquisti registrati).</p>
+        <p class="hint">Valore se vendessi domani (esclusi i BTP). Quote e ABP vengono dalle operazioni in Posizioni.</p>
         <div class="table-wrap">
           <table id="mercato-table" class="summary-table tabella-schede"></table>
         </div>
 
         <h2>Posizioni <span class="unit">(€)</span></h2>
-        <p class="hint">Clicca un nome o un tipo per vedere le sue operazioni.</p>
+        <p class="hint"><span class="solo-pc">Clicca un nome o un tipo per vedere le sue operazioni.</span><span class="solo-telefono">Tocca una voce per aprirla, la freccia per vederne le operazioni.</span></p>
         <div class="table-wrap">
           <table id="posizioni-table" class="summary-table tabella-schede"></table>
         </div>
 
         <h2>Per tipo <span class="unit">(€)</span></h2>
         <div class="table-wrap">
-          <table id="tipi-table" class="summary-table"></table>
+          <table id="tipi-table" class="summary-table tabella-schede"></table>
         </div>
 
       </section>
@@ -183,19 +198,7 @@
         <datalist id="investimenti-list"></datalist>
         <datalist id="tipi-list"></datalist>
 
-        <div class="filters">
-          <select id="inv-filtro-posizione" aria-label="Posizione"></select>
-          <select id="inv-filtro-stato" aria-label="Stato"></select>
-          <select id="inv-filtro-operazione" aria-label="Operazione"></select>
-          <select id="inv-filtro-tipo" aria-label="Tipo"></select>
-          <select id="inv-filtro-anno" aria-label="Anno"></select>
-          <input id="inv-filtro-testo" type="search" placeholder="Cerca nome, ISIN, note..." autocomplete="off">
-          <button id="inv-filtro-reset" class="secondary-button" type="button" title="Mostra tutte le operazioni">Svuota filtri</button>
-          <p id="inv-totali" class="totali"></p>
-        </div>
-
-        <div class="titolo-azioni">
-          <h2>Operazioni</h2>
+        <div class="toolbar">
           <button id="i-nuova" class="primary-button" type="button" title="Aggiunge in cima alla tabella una riga da compilare (Invio salva, Esc annulla)">+ Nuova operazione</button>
           <button class="secondary-button aggiorna-prezzi" type="button" title="Prende da Yahoo Finance i prezzi di oggi e ricalcola la plusvalenza se vendessi domani (esclusi i BTP)">Aggiorna prezzi</button>
           <button id="fineco-button" class="secondary-button excel-button" type="button" title="Importa l'estratto conto Fineco (movements_....xlsx): movimenti del conto e operazioni del registro">
@@ -204,9 +207,24 @@
           </button>
           <input id="fineco-input" type="file" accept=".xlsx,.xls" hidden>
         </div>
+
         <div id="fineco-panel" class="box hidden"></div>
+
+        <!-- Filtri (come in Movimenti): ricerca; sul telefono le tendine compaiono con "Avanzate" -->
+        <div id="inv-filtri" class="filters">
+          <input id="inv-filtro-testo" type="search" placeholder="Cerca in tutto (nome, ISIN, tipo, data, importo, note...)" autocomplete="off">
+          <button id="inv-filtri-avanzate" class="secondary-button solo-telefono filtri-avanzate-pulsante" type="button" data-filtri="inv-filtri" aria-expanded="false">Avanzate</button>
+          <button id="inv-filtro-reset" class="secondary-button" type="button" title="Mostra tutte le operazioni">Svuota filtri</button>
+          <select id="inv-filtro-posizione" class="filtro-avanzato" aria-label="Posizione"></select>
+          <select id="inv-filtro-stato" class="filtro-avanzato" aria-label="Stato"></select>
+          <select id="inv-filtro-operazione" class="filtro-avanzato" aria-label="Operazione"></select>
+          <select id="inv-filtro-tipo" class="filtro-avanzato" aria-label="Tipo"></select>
+          <select id="inv-filtro-anno" class="filtro-avanzato" aria-label="Anno"></select>
+          <p id="inv-totali" class="totali"></p>
+        </div>
+
         <div class="table-wrap">
-          <table class="summary-table">
+          <table class="summary-table registro-table">
             <thead>
               <tr>
                 <th><button class="sort-button" type="button" data-sort-inv="data">Data<span class="sort-indicator" aria-hidden="true"></span></button></th>
@@ -268,6 +286,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=49"></script>
+    <script type="module" src="./assets/app.js?v=53"></script>
   </body>
 </html>
