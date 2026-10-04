@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=23">
+    <link rel="stylesheet" href="./assets/styles.css?v=26">
   </head>
   <body>
     <div class="page-shell">
@@ -92,7 +92,8 @@
             <select class="year-select" aria-label="Anno"></select>
           </label>
           <div class="toggle" role="group" aria-label="Mostra uscite o entrate">
-            <button type="button" class="toggle-button active" data-tipo="uscita">Uscite</button>
+            <button type="button" class="toggle-button active" data-tipo="sintesi">Sintesi</button>
+            <button type="button" class="toggle-button" data-tipo="uscita">Uscite</button>
             <button type="button" class="toggle-button" data-tipo="entrata">Entrate</button>
           </div>
           <!-- Calcolato dall'import (conto a fine anno precedente): solo da leggere -->
@@ -104,11 +105,13 @@
 
         <div class="charts">
           <div class="chart-box">
+            <!-- Sul telefono, toccando il grafico, si apre a schermo intero: ✕ lo chiude -->
+            <button class="icon-button chiudi-primo-piano" type="button" aria-label="Chiudi">✕</button>
             <h2 id="titolo-grafico-linee"></h2>
             <div class="chart-canvas"><canvas id="chart-andamento"></canvas></div>
           </div>
           <!-- Torta chiusa di default: si apre cliccando il titolo -->
-          <details class="chart-box chart-torta">
+          <details id="torta-categorie" class="chart-box chart-torta">
             <summary>
               <svg class="icona-torta" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 2.05A10 10 0 1 0 21.95 13H11z"/><path d="M13 2.05V11h8.95A10 10 0 0 0 13 2.05z"/></svg>
               <h2 id="titolo-grafico-categorie"></h2>
@@ -141,6 +144,7 @@
 
         <div class="charts investimenti-charts">
           <div class="chart-box">
+            <button class="icon-button chiudi-primo-piano" type="button" aria-label="Chiudi">✕</button>
             <h2>Andamento nel tempo</h2>
             <div class="chart-canvas"><canvas id="chart-investimenti"></canvas></div>
           </div>
@@ -256,6 +260,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=32"></script>
+    <script type="module" src="./assets/app.js?v=36"></script>
   </body>
 </html>

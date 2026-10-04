@@ -390,6 +390,79 @@ details summary {
   height: 360px;
 }
 
+/* Riga sotto i grafici a linee con i valori del punto indicato dal mouse (o dal dito):
+   sul computer compare passando il mouse e si chiude cliccando altrove; sul telefono si vede
+   solo con il grafico in primo piano */
+.valori-grafico {
+  display: none;
+}
+
+.mostra-valori .valori-grafico,
+.primo-piano .valori-grafico {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.8rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.valori-grafico strong,
+.valori-grafico b {
+  color: var(--ink);
+}
+
+.valori-grafico i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 0.3rem;
+  border-radius: 2px;
+}
+
+/* Telefono: grafico a linee in primo piano (a schermo intero) dopo averlo toccato */
+.chiudi-primo-piano {
+  display: none;
+}
+
+.chart-box.primo-piano {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  overflow-y: auto;
+  padding: 0.75rem 0.75rem 1.5rem;
+  background: var(--surface);
+}
+
+.primo-piano .chiudi-primo-piano {
+  display: block;
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  font-size: 1.1rem;
+}
+
+.primo-piano h2 {
+  padding-right: 2.5rem;
+}
+
+.chart-box.primo-piano .chart-canvas {
+  height: 62vh;
+}
+
+/* In primo piano i valori uno per riga, più grandi, da selezionare e copiare */
+.primo-piano .valori-grafico {
+  flex-direction: column;
+  align-items: flex-start;
+  font-size: 0.95rem;
+  user-select: text;
+}
+
+body.con-primo-piano {
+  overflow: hidden;
+}
+
 .chart-torta summary {
   cursor: pointer;
   color: var(--ink-soft);
@@ -1019,8 +1092,9 @@ tr.editing .check-field {
     height: 280px;
   }
 
-  /* Torta con la legenda sotto: serve più spazio */
-  .chart-torta .chart-canvas {
+  /* Torta, e linee per categoria (Uscite/Entrate), con la legenda lunga sotto: serve più spazio */
+  .chart-torta .chart-canvas,
+  .chart-canvas.per-categoria {
     height: 460px;
   }
 

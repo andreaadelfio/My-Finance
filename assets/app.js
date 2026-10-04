@@ -5,8 +5,8 @@ const LISTA_PAGINA = 100; // movimenti caricati a ogni scorrimento
 const state = {
   supabase: null,
   year: undefined, // anno della Dashboard; null = tutti gli anni
-  tipoDashboard: "uscita", // la Dashboard mostra le uscite o le entrate
-  gruppiAperti: new Set(["uscita"]), // gruppi della tabella andamento con le categorie visibili
+  tipoDashboard: "sintesi", // la Dashboard mostra la sintesi, le uscite o le entrate
+  gruppiAperti: new Set(), // gruppi della tabella andamento con le categorie visibili
   years: [],
   categorie: [],
   aggregati: [], // somme per anno, mese e categoria calcolate dal database
@@ -39,6 +39,7 @@ const elements = {
   viewMovimenti: document.querySelector("#view-movimenti"),
   viewDashboard: document.querySelector("#view-dashboard"),
   toggleButtons: [...document.querySelectorAll(".toggle-button")],
+  tortaCategorie: document.querySelector("#torta-categorie"),
   titoloGraficoLinee: document.querySelector("#titolo-grafico-linee"),
   titoloGraficoCategorie: document.querySelector("#titolo-grafico-categorie"),
   saldoField: document.querySelector("#saldo-field"),
@@ -1232,14 +1233,19 @@ function apriChiudiGruppo(button) {
 }
 
 function renderDashboard() {
-  const uscite = state.tipoDashboard === "uscita";
-  elements.toggleButtons.forEach((button) => button.classList.toggle("active", button.dataset.tipo === state.tipoDashboard));
-  elements.titoloGraficoLinee.textContent = uscite
-    ? "Uscite, entrate, risparmio e saldo mensili"
-    : "Entrate per categoria nel tempo";
-  elements.titoloGraficoCategorie.textContent = uscite
+  const tipo = state.tipoDashboard;
+  elements.toggleButtons.forEach((button) => button.classList.toggle("active", button.dataset.tipo === tipo));
+  elements.titoloGraficoLinee.textContent = {
+    sintesi: "Uscite, entrate, risparmio e saldo mensili",
+    uscita: "Uscite per categoria nel tempo",
+    entrata: "Entrate per categoria nel tempo"
+  }[tipo];
+  elements.titoloGraficoCategorie.textContent = tipo === "uscita"
     ? "Categorie per spesa (interno) e per n° operazioni (esterno)"
     : "Totale per categoria";
+  // La Sintesi non ha la torta delle categorie; le linee per categoria hanno una legenda lunga
+  elements.tortaCategorie.classList.toggle("hidden", tipo === "sintesi");
+  elements.chartAndamento.parentElement.classList.toggle("per-categoria", tipo !== "sintesi");
   const anno = budgetYear();
   elements.budgetHint.textContent = tuttiGliAnni()
     ? "Con tutti gli anni le celle rosse superano il budget annuale (12 mesi); il budget si modifica scegliendo un anno."
@@ -1251,8 +1257,8 @@ function renderDashboard() {
   elements.saldoValore.textContent = saldo === undefined ? "—" : formatEuro(saldo);
   elements.titoloPeriodo.textContent = tuttiGliAnni() ? "Andamento annuale" : "Andamento mensile";
   renderAndamento();
-  if (uscite) renderCharts();
-  else renderEntrateCharts();
+  if (tipo === "sintesi") renderCharts();
+  else renderCategorieCharts(tipo);
 }
 
 // ---------------------------------------------------------------------------
@@ -1325,7 +1331,6 @@ function drawChart(key, canvas, config) {
   state.charts[key] = new window.Chart(canvas, config);
 }
 
-const euroTooltip = { callbacks: { label: (item) => `${item.dataset.label}: ${formatEuro(item.raw)}` } };
 
 // Sul telefono (schermo stretto) i grafici hanno meno etichette e più piccole
 const schermoStretto = () => window.innerWidth < 720;
@@ -1355,7 +1360,103 @@ function clicLegenda(_evento, voce, legenda) {
     chart.$legenda = passo === 3 ? null : { indice: i, passo };
   }
   chart.update();
+  // la riga dei valori sotto il grafico segue le linee visibili
+  if (chart.$titoloValori) mostraValori(chart, chart.$indiceValori);
 }
+
+// Valori sotto il grafico, al posto del riquadro scuro di Chart.js che con tante linee copre
+// tutto: passando il mouse (o il dito) sul grafico, la riga sotto mostra la data e i valori di
+// quel punto. chart.$titoloValori(i) dà la data del punto i.
+const valoreY = (punto) => (punto !== null && typeof punto === "object" ? punto.y : punto);
+
+function mostraValori(chart, indice) {
+  let riga = chart.canvas.parentElement.nextElementSibling;
+  if (!riga?.classList.contains("valori-grafico")) {
+    riga = document.createElement("p");
+    riga.className = "valori-grafico";
+    chart.canvas.parentElement.after(riga);
+  }
+  chart.$indiceValori = indice;
+  if (indice === null || indice < 0) {
+    riga.textContent = "";
+    return;
+  }
+  const valori = chart.data.datasets
+    .map((dataset, i) => ({ dataset, valore: chart.isDatasetVisible(i) ? valoreY(dataset.data[indice]) : null }))
+    .filter(({ valore }) => valore !== null && valore !== undefined && valore !== 0);
+  // Con tante linee (categorie) dal valore più grande; altrimenti nell'ordine della legenda
+  if (chart.data.datasets.length > 4) valori.sort((a, b) => Math.abs(b.valore) - Math.abs(a.valore));
+  riga.innerHTML = `<strong>${escapeHtml(chart.$titoloValori(indice))}</strong>${
+    valori.length
+      ? valori.map(({ dataset, valore }) => `<span class="valore"><i style="background:${dataset.borderColor}"></i>${escapeHtml(dataset.label)} <b>${formatEuro(valore)}</b></span>`).join("")
+      : '<span class="zero">nessun valore</span>'
+  }`;
+}
+
+// Opzione tooltip dei grafici a linee: niente riquadro, aggiorna la riga dei valori.
+// Sul computer la riga compare passando il mouse (e si chiude cliccando altrove); sul
+// telefono si vede solo con il grafico in primo piano.
+const valoriSottoIlGrafico = {
+  enabled: false,
+  external: ({ chart, tooltip }) => {
+    const indice = tooltip.dataPoints?.[0]?.dataIndex;
+    if (indice === undefined || tooltip.opacity === 0) return;
+    if (indice !== chart.$indiceValori) mostraValori(chart, indice);
+    if (!schermoStretto()) chart.canvas.closest(".chart-box").classList.add("mostra-valori");
+  }
+};
+
+// Telefono: toccando un grafico a linee lo si porta in primo piano (a schermo intero), con
+// sotto i valori del mese toccato da copiare. Si chiude con ✕ o con il tasto indietro.
+function apriPrimoPiano(box) {
+  if (!schermoStretto() || box.classList.contains("primo-piano")) return;
+  box.classList.add("primo-piano");
+  document.body.classList.add("con-primo-piano");
+  history.pushState({ primoPiano: true }, "");
+}
+
+function chiudiPrimoPiano() {
+  document.querySelectorAll(".chart-box.primo-piano").forEach((box) => box.classList.remove("primo-piano"));
+  document.body.classList.remove("con-primo-piano");
+}
+
+// Computer: un clic fuori dal grafico e dalla riga dei valori chiude la riga
+function chiudiValoriFuori(event) {
+  document.querySelectorAll(".chart-box.mostra-valori").forEach((box) => {
+    const dentro = box.querySelector(".chart-canvas").contains(event.target) || box.querySelector(".valori-grafico")?.contains(event.target);
+    if (!dentro) box.classList.remove("mostra-valori");
+  });
+}
+
+// Dopo aver disegnato un grafico a linee: titolo dei punti e valori iniziali (l'ultimo punto
+// fino a "fino", tornando indietro finché c'è almeno un valore)
+function iniziaValori(key, titolo, fino) {
+  const chart = state.charts[key];
+  if (!chart) return;
+  chart.$titoloValori = titolo;
+  let indice = Math.min(fino ?? Infinity, Math.max(...chart.data.datasets.map((d) => d.data.length)) - 1);
+  while (indice > 0 && !chart.data.datasets.some((d) => ![null, undefined, 0].includes(valoreY(d.data[indice])))) indice -= 1;
+  mostraValori(chart, indice);
+}
+
+// Linea verticale sottile sul punto indicato dal mouse
+const lineaCursore = {
+  id: "lineaCursore",
+  afterDatasetsDraw(chart) {
+    const attivo = chart.getActiveElements()[0];
+    if (!attivo) return;
+    const { top, bottom } = chart.chartArea;
+    const { ctx } = chart;
+    ctx.save();
+    ctx.strokeStyle = "rgba(31, 42, 36, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(attivo.element.x, top);
+    ctx.lineTo(attivo.element.x, bottom);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
 
 const legendaSotto = () => ({
   position: "bottom",
@@ -1450,63 +1551,64 @@ function renderCharts() {
       plugins: {
         legend: legendaSotto(),
         lineaOggi: { posizione: posizioneOggiMesi(elenco) },
-        tooltip: {
-          callbacks: {
-            ...euroTooltip.callbacks,
-            title: (items) => `${items[0].label}${elenco[items[0].dataIndex]?.stima ? " (media mensile dal foglio Pre 2023)" : ""}`
-          }
-        }
+        tooltip: valoriSottoIlGrafico
       },
       scales: { ...euroAxis, x: asseMesi() },
       layout: { padding: { top: 14 } }
     },
-    plugins: [lineaOggi]
+    plugins: [lineaOggi, lineaCursore]
   });
-
-  const categorie = totaliCategorie("uscita");
-  const colori = categorie.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
-  drawChart("categorie", elements.chartCategorie, {
-    type: "doughnut",
-    data: {
-      labels: categorie.map((c) => c.nome),
-      datasets: [
-        { label: "N° operazioni", data: categorie.map((c) => c.operazioni), backgroundColor: colori },
-        { label: "Spesa", data: categorie.map((c) => Math.max(0, c.totale)), backgroundColor: colori }
-      ]
-    },
-    options: {
-      maintainAspectRatio: false,
-      cutout: "35%",
-      plugins: {
-        legend: { position: window.innerWidth < 720 ? "bottom" : "right", labels: { boxWidth: 12, font: { size: 11 } } },
-        tooltip: percentTooltip((item) => (item.dataset.label === "Spesa" ? formatEuro(item.raw) : `${item.raw} operazioni`))
-      }
-    },
-    plugins: [percentLabels]
-  });
+  iniziaValori("andamento", (i) => `${titoloMese(elenco[i])}${elenco[i].stima ? " (media mensile dal foglio Pre 2023)" : ""}`, Math.floor(posizioneOggiMesi(elenco) ?? Infinity));
 }
 
-function renderEntrateCharts() {
-  const categorie = totaliCategorie("entrata");
+// Mese e anno nella riga dei valori (con un solo anno l'etichetta sull'asse è solo il mese)
+function titoloMese(periodo) {
+  return `${MESI[periodo.mese - 1]} ${periodo.anno}`;
+}
+
+// Uscite o Entrate: una linea per categoria nel tempo e la torta del totale per categoria
+// (per le uscite anche il n° di operazioni, nell'anello esterno)
+function renderCategorieCharts(tipo) {
+  const categorie = totaliCategorie(tipo);
   const colori = categorie.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
-  drawChart("categorie", elements.chartCategorie, {
-    type: "pie",
-    data: {
-      labels: categorie.map((c) => c.nome),
-      datasets: [{ label: "Totale", data: categorie.map((c) => Math.max(0, c.totale)), backgroundColor: colori }]
-    },
-    options: {
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: window.innerWidth < 720 ? "bottom" : "right" },
-        tooltip: percentTooltip((item) => formatEuro(item.raw))
-      }
-    },
-    plugins: [percentLabels]
-  });
+  const legendaTorta = { position: window.innerWidth < 720 ? "bottom" : "right", labels: { boxWidth: 12, font: { size: 11 } } };
+  if (tipo === "uscita") {
+    drawChart("categorie", elements.chartCategorie, {
+      type: "doughnut",
+      data: {
+        labels: categorie.map((c) => c.nome),
+        datasets: [
+          { label: "N° operazioni", data: categorie.map((c) => c.operazioni), backgroundColor: colori },
+          { label: "Spesa", data: categorie.map((c) => Math.max(0, c.totale)), backgroundColor: colori }
+        ]
+      },
+      options: {
+        maintainAspectRatio: false,
+        cutout: "35%",
+        plugins: {
+          legend: legendaTorta,
+          tooltip: percentTooltip((item) => (item.dataset.label === "Spesa" ? formatEuro(item.raw) : `${item.raw} operazioni`))
+        }
+      },
+      plugins: [percentLabels]
+    });
+  } else {
+    drawChart("categorie", elements.chartCategorie, {
+      type: "pie",
+      data: {
+        labels: categorie.map((c) => c.nome),
+        datasets: [{ label: "Totale", data: categorie.map((c) => Math.max(0, c.totale)), backgroundColor: colori }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: legendaTorta, tooltip: percentTooltip((item) => formatEuro(item.raw)) }
+      },
+      plugins: [percentLabels]
+    });
+  }
 
   const elenco = periodi(true);
-  const perCategoria = totalsByCategory("entrata", elenco);
+  const perCategoria = totalsByCategory(tipo, elenco);
   drawChart("andamento", elements.chartAndamento, {
     type: "line",
     data: {
@@ -1522,10 +1624,13 @@ function renderEntrateCharts() {
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       elements: { point: { radius: tuttiGliAnni() ? 0 : 3 } },
-      plugins: { legend: legendaSotto(), tooltip: euroTooltip },
-      scales: { ...euroAxis, x: asseMesi() }
-    }
+      plugins: { legend: legendaSotto(), tooltip: valoriSottoIlGrafico, lineaOggi: { posizione: posizioneOggiMesi(elenco) } },
+      scales: { ...euroAxis, x: asseMesi() },
+      layout: { padding: { top: 14 } }
+    },
+    plugins: [lineaOggi, lineaCursore]
   });
+  iniziaValori("andamento", (i) => titoloMese(elenco[i]), Math.floor(posizioneOggiMesi(elenco) ?? Infinity));
 }
 
 async function saveBudget(input) {
@@ -2186,12 +2291,7 @@ function renderInvestimentiCharts(righe, tipi) {
       plugins: {
         legend: legendaSotto(),
         lineaOggi: { posizione: punti.length ? giorno(oggi) : null },
-        tooltip: {
-          callbacks: {
-            title: (items) => formatDate(punti[items[0].dataIndex].data),
-            label: (item) => `${item.dataset.label}: ${formatEuro(item.raw.y)}`
-          }
-        }
+        tooltip: valoriSottoIlGrafico
       },
       scales: {
         x: {
@@ -2210,8 +2310,10 @@ function renderInvestimentiCharts(righe, tipi) {
       },
       layout: { padding: { top: 14 } }
     },
-    plugins: [lineaOggi]
+    plugins: [lineaOggi, lineaCursore]
   });
+  // All'inizio i valori di oggi: l'ultima operazione già avvenuta
+  iniziaValori("investimenti", (i) => formatDate(punti[i].data), punti.findLastIndex((p) => p.data <= oggi));
 }
 
 // Registro investimenti modificabile in linea, come la lista Movimenti: la matita trasforma
@@ -2536,10 +2638,18 @@ function bindEvents() {
     const target = event.target.closest(".clickable");
     if (target) openMovimentiFiltrati(target.dataset.anno, target.dataset.mese, target.dataset.categoria);
   });
+  // Grafici a linee: primo piano sul telefono, riga dei valori che si chiude cliccando altrove
+  [elements.chartAndamento, elements.chartInvestimenti].forEach((canvas) => {
+    canvas.addEventListener("click", () => apriPrimoPiano(canvas.closest(".chart-box")));
+  });
+  document.querySelectorAll(".chiudi-primo-piano").forEach((button) => button.addEventListener("click", () => history.back()));
+  window.addEventListener("popstate", chiudiPrimoPiano);
+  document.addEventListener("click", chiudiValoriFuori);
+
   elements.toggleButtons.forEach((button) => button.addEventListener("click", () => {
     state.tipoDashboard = button.dataset.tipo;
-    // Nella tabella resta aperto solo il gruppo scelto
-    state.gruppiAperti = new Set([state.tipoDashboard]);
+    // Nella tabella resta aperto solo il gruppo scelto (con la Sintesi nessuno)
+    state.gruppiAperti = new Set(state.tipoDashboard === "sintesi" ? [] : [state.tipoDashboard]);
     renderDashboard();
   }));
   elements.viewDashboard.addEventListener("change", (event) => {
