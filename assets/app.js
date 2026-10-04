@@ -3231,9 +3231,18 @@ function renderTabs(view) {
       // Con Tab si entra in ogni interruttore sulla voce scelta, poi si usano le frecce
       tab.tabIndex = tab.classList.contains("selected") ? 0 : -1;
     });
-    sw.style.setProperty("--n", voci.length);
-    sw.style.setProperty("--i", Math.max(0, voci.findIndex((tab) => tab.classList.contains("selected"))));
     sw.closest(".switch-group").classList.toggle("current", Boolean(scelta));
+  });
+  posizionaCursori();
+}
+
+// Il cursore di ogni interruttore va sotto la voce scelta: posizione e larghezza della voce,
+// perché ogni voce è larga quanto la sua parola (da ricalcolare se cambia la larghezza)
+function posizionaCursori() {
+  document.querySelectorAll(".switch").forEach((sw) => {
+    const voce = sw.querySelector(".tab.selected") || sw.querySelector(".tab");
+    sw.style.setProperty("--x", `${voce.offsetLeft}px`);
+    sw.style.setProperty("--w", `${voce.offsetWidth}px`);
   });
 }
 
@@ -3405,6 +3414,10 @@ function bindEvents() {
     const target = event.target.closest(".clickable");
     if (target) openMovimentiFiltrati(target.dataset.anno, target.dataset.mese, target.dataset.categoria);
   });
+  // Cursore degli interruttori: si riposiziona se cambia la larghezza delle voci
+  window.addEventListener("resize", posizionaCursori);
+  document.fonts?.ready.then(posizionaCursori);
+
   // Zoom dei grafici a linee: "Reimposta zoom" o doppio clic per tornare al grafico intero
   [elements.chartAndamento, elements.chartInvestimenti].forEach((canvas) => {
     canvas.parentElement.querySelector(".zoom-reset").addEventListener("click", (event) => {
