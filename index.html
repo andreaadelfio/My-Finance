@@ -15,7 +15,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon-192.png">
-    <link rel="stylesheet" href="./assets/styles.css?v=40">
+    <link rel="stylesheet" href="./assets/styles.css?v=41">
   </head>
   <body>
     <div class="page-shell">
@@ -124,7 +124,9 @@
             <!-- Sul telefono, toccando il grafico, si apre a schermo intero: ✕ lo chiude -->
             <button class="icon-button chiudi-primo-piano" type="button" aria-label="Chiudi">✕</button>
             <h2 id="titolo-grafico-linee"></h2>
-            <div class="chart-canvas"><canvas id="chart-andamento"></canvas></div>
+            <div class="chart-canvas">
+              <button class="zoom-reset hidden" type="button" title="Torna al grafico intero (anche doppio clic)">Reimposta zoom</button>
+              <canvas id="chart-andamento"></canvas></div>
           </div>
           <!-- Torta chiusa di default: si apre cliccando il titolo -->
           <details id="torta-categorie" class="chart-box chart-torta">
@@ -163,7 +165,9 @@
           <div class="chart-box">
             <button class="icon-button chiudi-primo-piano" type="button" aria-label="Chiudi">✕</button>
             <h2>Andamento nel tempo</h2>
-            <div class="chart-canvas"><canvas id="chart-investimenti"></canvas></div>
+            <div class="chart-canvas">
+              <button class="zoom-reset hidden" type="button" title="Torna al grafico intero (anche doppio clic)">Reimposta zoom</button>
+              <canvas id="chart-investimenti"></canvas></div>
           </div>
           <details class="chart-box chart-torta">
             <summary>
@@ -284,8 +288,11 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <!-- Zoom nei grafici a linee: trascinando col mouse, a due dita sul telefono -->
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=53"></script>
+    <script type="module" src="./assets/app.js?v=55"></script>
   </body>
 </html>

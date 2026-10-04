@@ -1447,6 +1447,9 @@ const lineaOggi = {
     const posizione = options?.posizione;
     if (posizione === null || posizione === undefined) return;
     const scala = chart.scales.x;
+    // Grafico ingrandito (zoom) su un tratto che non contiene oggi: niente linea. Per l'asse a
+    // mesi c'è un mese di margine (oggi cade tra il punto del mese in corso e il successivo).
+    if (posizione < scala.min || posizione > scala.max + (scala.type === "category" ? 1 : 0)) return;
     const primo = Math.floor(posizione);
     const x0 = scala.getPixelForValue(primo);
     const { top, bottom, left, right } = chart.chartArea;
@@ -1563,11 +1566,57 @@ function apriPrimoPiano(box) {
   box.classList.add("primo-piano");
   document.body.classList.add("con-primo-piano");
   history.pushState({ primoPiano: true }, "");
+  ridisegnaGrafico(box); // con lo zoom a due dita acceso
 }
 
 function chiudiPrimoPiano() {
-  document.querySelectorAll(".chart-box.primo-piano").forEach((box) => box.classList.remove("primo-piano"));
+  document.querySelectorAll(".chart-box.primo-piano").forEach((box) => {
+    box.classList.remove("primo-piano");
+    ridisegnaGrafico(box); // zoom spento: il dito sul grafico torna a far scorrere la pagina
+  });
   document.body.classList.remove("con-primo-piano");
+}
+
+// Ridisegna il grafico a linee di un riquadro tenendo il punto mostrato nella riga dei valori
+function ridisegnaGrafico(box) {
+  const canvas = box.querySelector("canvas");
+  const indice = window.Chart?.getChart(canvas)?.$indiceValori;
+  if (canvas === elements.chartAndamento) {
+    if (state.tipoDashboard === "sintesi") renderCharts();
+    else renderCategorieCharts(state.tipoDashboard);
+  }
+  if (canvas === elements.chartInvestimenti) renderInvestimenti();
+  const chart = window.Chart?.getChart(canvas);
+  if (chart?.$titoloValori && indice !== undefined) mostraValori(chart, indice);
+}
+
+// Zoom nei grafici a linee (chartjs-plugin-zoom), solo in orizzontale: sul computer si
+// trascina col mouse su un tratto; sul telefono a due dita, solo con il grafico in primo
+// piano (altrimenti il dito sul grafico non farebbe più scorrere la pagina).
+// "Reimposta zoom" o doppio clic per tornare al grafico intero. ampiezzaMinima nelle unità
+// dell'asse x (mesi per la Dashboard, millisecondi per gli investimenti).
+function opzioniZoom(canvas, ampiezzaMinima) {
+  const telefono = schermoStretto();
+  const attivo = !telefono || canvas.closest(".chart-box").classList.contains("primo-piano");
+  const mostraReset = ({ chart }) => {
+    chart.canvas.parentElement.querySelector(".zoom-reset").classList.toggle("hidden", !chart.isZoomedOrPanned());
+  };
+  canvas.parentElement.querySelector(".zoom-reset").classList.add("hidden"); // grafico nuovo: non ingrandito
+  return {
+    zoom: {
+      drag: { enabled: attivo && !telefono, backgroundColor: "rgba(63, 109, 86, 0.15)" },
+      pinch: { enabled: attivo && telefono },
+      mode: "x",
+      onZoomComplete: mostraReset
+    },
+    pan: { enabled: attivo && telefono, mode: "x", onPanComplete: mostraReset },
+    limits: { x: { min: "original", max: "original", minRange: ampiezzaMinima } }
+  };
+}
+
+function reimpostaZoom(canvas) {
+  window.Chart?.getChart(canvas)?.resetZoom();
+  canvas.parentElement.querySelector(".zoom-reset").classList.add("hidden");
 }
 
 // Dopo aver disegnato un grafico a linee: titolo dei punti e valori iniziali (l'ultimo punto
@@ -1689,6 +1738,7 @@ function renderCharts() {
       datasets: { line: { segment: { borderDash: (ctx) => (elenco[ctx.p1DataIndex]?.stima ? [5, 4] : undefined) } } },
       plugins: {
         legend: senzaLegenda(),
+        zoom: opzioniZoom(elements.chartAndamento, 2), // almeno due mesi
         lineaOggi: { posizione: posizioneOggiMesi(elenco) },
         tooltip: valoriSottoIlGrafico
       },
@@ -1763,7 +1813,7 @@ function renderCategorieCharts(tipo) {
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       elements: { point: { radius: tuttiGliAnni() ? 0 : 3 } },
-      plugins: { legend: senzaLegenda(), tooltip: valoriSottoIlGrafico, lineaOggi: { posizione: posizioneOggiMesi(elenco) } },
+      plugins: { legend: senzaLegenda(), zoom: opzioniZoom(elements.chartAndamento, 2), tooltip: valoriSottoIlGrafico, lineaOggi: { posizione: posizioneOggiMesi(elenco) } },
       scales: { ...euroAxis, x: asseMesi() },
       layout: { padding: { top: 14 } }
     },
@@ -2911,6 +2961,7 @@ function renderInvestimentiCharts(righe, tipi) {
       elements: { point: { radius: 0 }, line: { stepped: true } },
       plugins: {
         legend: senzaLegenda(),
+        zoom: opzioniZoom(elements.chartInvestimenti, 60 * 86400000), // almeno due mesi
         lineaOggi: { posizione: punti.length ? giorno(oggi) : null },
         tooltip: valoriSottoIlGrafico
       },
@@ -2920,12 +2971,32 @@ function renderInvestimentiCharts(righe, tipi) {
           min: giorno(`${primoAnno}-01-01`),
           max: giorno(`${ultimoAnno + 1}-01-01`),
           afterBuildTicks: (scala) => {
+            // Ingrandito su meno di due anni (zoom): tacche al primo di ogni mese (o ogni 3 mesi)
+            if (scala.max - scala.min < 2 * 365 * 86400000) {
+              const mesi = (scala.max - scala.min) / (30 * 86400000);
+              const passo = mesi > (schermoStretto() ? 6 : 12) ? 3 : 1;
+              scala.ticks = [];
+              const d = new Date(scala.min);
+              for (let m = new Date(d.getFullYear(), d.getMonth() + 1, 1); m.getTime() <= scala.max; m.setMonth(m.getMonth() + passo)) {
+                scala.ticks.push({ value: m.getTime() });
+              }
+              return;
+            }
             scala.ticks = [];
             // sul telefono un anno sì e uno no, altrimenti le etichette si toccano
             const passo = schermoStretto() ? 2 : 1;
             for (let anno = primoAnno; anno <= ultimoAnno + 1; anno += passo) scala.ticks.push({ value: giorno(`${anno}-01-01`) });
           },
-          ticks: { callback: (valore) => new Date(valore).getFullYear(), maxRotation: 0, autoSkip: true }
+          ticks: {
+            callback(valore) {
+              const data = new Date(valore);
+              return this.max - this.min < 2 * 365 * 86400000
+                ? `${MESI[data.getMonth()]} ${String(data.getFullYear()).slice(2)}`
+                : data.getFullYear();
+            },
+            maxRotation: 0,
+            autoSkip: true
+          }
         },
         y: { ticks: { callback: (value) => formatEuroBreve(value) } }
       },
@@ -3334,6 +3405,15 @@ function bindEvents() {
     const target = event.target.closest(".clickable");
     if (target) openMovimentiFiltrati(target.dataset.anno, target.dataset.mese, target.dataset.categoria);
   });
+  // Zoom dei grafici a linee: "Reimposta zoom" o doppio clic per tornare al grafico intero
+  [elements.chartAndamento, elements.chartInvestimenti].forEach((canvas) => {
+    canvas.parentElement.querySelector(".zoom-reset").addEventListener("click", (event) => {
+      event.stopPropagation();
+      reimpostaZoom(canvas);
+    });
+    canvas.addEventListener("dblclick", () => reimpostaZoom(canvas));
+  });
+
   // Grafici a linee: primo piano sul telefono, riga dei valori che si chiude cliccando altrove
   [elements.chartAndamento, elements.chartInvestimenti].forEach((canvas) => {
     canvas.addEventListener("click", () => apriPrimoPiano(canvas.closest(".chart-box")));
