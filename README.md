@@ -176,6 +176,19 @@ make stop
 
 Su Windows senza make: `.\make dev` e `.\make stop` (PowerShell) oppure `make dev` (cmd).
 
+### Anteprima mobile
+
+```bash
+make dev_mob   # http://127.0.0.1:8003/mobile  (Ctrl+C per fermarla; Windows: .\make dev_mob)
+```
+
+Apre il sito dentro un "telefono" delle misure del Motorola edge 50 neo (circa 412 × 915 px
+in Chrome; "Ruota" per l'orizzontale). Si ricarica da solo ogni volta che salvi un file del
+sito, restando nella sezione aperta. All'avvio stampa anche l'indirizzo da aprire sul telefono
+vero, collegato alla stessa rete Wi-Fi. Aprendo `/mobile` sul telefono, la riga in fondo
+mostra le sue misure esatte: si usano con `/mobile?w=...&h=...`.
+Il server (`dev_server.py`) non usa la cache e serve solo i file del sito (non `backup/`).
+
 ## Pubblicazione
 
 Come Listino Prezzi: repository GitHub con GitHub Pages sul branch `main`, poi `make git`

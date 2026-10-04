@@ -372,9 +372,10 @@ details summary {
 
 /* Grafici */
 
+/* Il grafico a linee a tutta larghezza; sotto la torta, chiusa finché non la apri */
 .charts {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   margin-top: 1rem;
 }
@@ -387,6 +388,27 @@ details summary {
 .chart-canvas {
   position: relative;
   height: 360px;
+}
+
+.chart-torta summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+
+.chart-torta summary h2 {
+  display: inline;
+}
+
+.icona-torta {
+  width: 18px;
+  height: 18px;
+  margin: 0 0.3rem 0 0.2rem;
+  vertical-align: -3px;
+  fill: var(--accent);
+}
+
+.chart-torta[open] summary {
+  margin-bottom: 0.5rem;
 }
 
 /* Investimenti */
@@ -785,12 +807,6 @@ tr.editing .check-field {
   text-align: right;
 }
 
-@media (max-width: 900px) {
-  .charts {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 /* Proposte: proposta del giorno e schede dei titoli della watchlist */
 
 .impostazione-input {
@@ -1000,6 +1016,11 @@ tr.editing .check-field {
   }
 
   .chart-canvas {
+    height: 280px;
+  }
+
+  /* Torta con la legenda sotto: serve più spazio */
+  .chart-torta .chart-canvas {
     height: 460px;
   }
 

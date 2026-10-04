@@ -8,10 +8,15 @@ all: git
 ifeq ($(OS),Windows_NT)
 PS = powershell -NoProfile -ExecutionPolicy Bypass -File make-windows.ps1
 
-git dev stop backup:
+git dev stop backup dev_mob:
 	@$(PS) $@ -Port $(PORT) -HostName $(HOST) -SiteDir "$(SITE_DIR)"
 
 else
+
+# Anteprima mobile: il sito in un "telefono" che si ricarica da solo a ogni salvataggio,
+# raggiungibile anche dal telefono vero sulla stessa rete Wi-Fi (Ctrl+C per fermarla)
+dev_mob:
+	python3 dev_server.py 8003 --rete
 
 # Copia di tutte le tabelle in backup/myfinance-backup-AAAA-MM-GG.json
 backup:
@@ -42,4 +47,4 @@ stop:
 
 endif
 
-.PHONY: all git dev stop backup
+.PHONY: all git dev stop backup dev_mob

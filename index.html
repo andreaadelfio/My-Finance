@@ -9,7 +9,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=21">
+    <link rel="stylesheet" href="./assets/styles.css?v=23">
   </head>
   <body>
     <div class="page-shell">
@@ -107,10 +107,14 @@
             <h2 id="titolo-grafico-linee"></h2>
             <div class="chart-canvas"><canvas id="chart-andamento"></canvas></div>
           </div>
-          <div class="chart-box">
-            <h2 id="titolo-grafico-categorie"></h2>
+          <!-- Torta chiusa di default: si apre cliccando il titolo -->
+          <details class="chart-box chart-torta">
+            <summary>
+              <svg class="icona-torta" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 2.05A10 10 0 1 0 21.95 13H11z"/><path d="M13 2.05V11h8.95A10 10 0 0 0 13 2.05z"/></svg>
+              <h2 id="titolo-grafico-categorie"></h2>
+            </summary>
             <div class="chart-canvas"><canvas id="chart-categorie"></canvas></div>
-          </div>
+          </details>
         </div>
 
         <h2><span class="titolo-periodo">Andamento mensile</span> <span class="unit">(€)</span></h2>
@@ -137,13 +141,16 @@
 
         <div class="charts investimenti-charts">
           <div class="chart-box">
-            <h2>Capitale impegnato per tipo di prodotto</h2>
-            <div class="chart-canvas"><canvas id="chart-tipi"></canvas></div>
-          </div>
-          <div class="chart-box">
             <h2>Andamento nel tempo</h2>
             <div class="chart-canvas"><canvas id="chart-investimenti"></canvas></div>
           </div>
+          <details class="chart-box chart-torta">
+            <summary>
+              <svg class="icona-torta" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 2.05A10 10 0 1 0 21.95 13H11z"/><path d="M13 2.05V11h8.95A10 10 0 0 0 13 2.05z"/></svg>
+              <h2>Capitale impegnato per tipo di prodotto</h2>
+            </summary>
+            <div class="chart-canvas"><canvas id="chart-tipi"></canvas></div>
+          </details>
         </div>
 
         <h2>Posizioni aperte a prezzo di mercato <span class="unit">(€)</span></h2>
@@ -249,6 +256,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=29"></script>
+    <script type="module" src="./assets/app.js?v=32"></script>
   </body>
 </html>

@@ -1,6 +1,6 @@
-﻿# Equivalente Windows del Makefile: .\make dev | .\make stop | .\make git | .\make backup
+﻿# Equivalente Windows del Makefile: .\make dev | .\make stop | .\make git | .\make backup | .\make dev_mob
 param(
-  [ValidateSet("all", "dev", "stop", "git", "backup")]
+  [ValidateSet("all", "dev", "stop", "git", "backup", "dev_mob")]
   [string]$Target = "all",
   [int]$Port = 8002,
   [string]$HostName = "127.0.0.1",
@@ -50,5 +50,6 @@ switch ($Target) {
   "dev"  { Invoke-Dev }
   "stop" { Invoke-Stop }
   "backup" { python "$PSScriptRoot\backup.py" }
+  "dev_mob" { python "$PSScriptRoot\dev_server.py" 8003 --rete }
   default { Invoke-Git }
 }

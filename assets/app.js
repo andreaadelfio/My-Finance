@@ -970,14 +970,17 @@ function tipoAggregato(riga) {
 // Periodi: [{ key, label, anno, mese }]; mese null = anno intero
 function periodi(perGrafico) {
   if (!tuttiGliAnni()) {
-    return MESI.map((nome, i) => ({ key: `${state.year}-${i + 1}`, label: perGrafico ? `${nome} ${state.year}` : nome, anno: state.year, mese: i + 1 }));
+    // Con un solo anno l'anno è già nel filtro: le etichette sono solo i mesi
+    return MESI.map((nome, i) => ({ key: `${state.year}-${i + 1}`, label: nome, anno: state.year, mese: i + 1 }));
   }
   const anni = [...new Set(state.aggregati.map((r) => r.anno))].sort((a, b) => a - b);
   if (!perGrafico) return anni.map((anno) => ({ key: String(anno), label: String(anno), anno, mese: null }));
   const lista = [];
   for (const anno of anni) {
     const mesi = state.aggregati.filter((r) => r.anno === anno).map((r) => r.mese);
-    const ultimo = anno === anni[anni.length - 1] ? Math.max(...mesi) : 12;
+    // L'ultimo anno arriva almeno al mese in corso (anche senza movimenti), per la linea di oggi
+    const meseInCorso = anno === new Date().getFullYear() ? new Date().getMonth() + 1 : 0;
+    const ultimo = anno === anni[anni.length - 1] ? Math.max(...mesi, meseInCorso) : 12;
     const primo = anno === anni[0] ? Math.min(...mesi) : 1;
     for (let mese = primo; mese <= ultimo; mese += 1) {
       lista.push({ key: `${anno}-${mese}`, label: `${MESI[mese - 1]} ${anno}`, anno, mese });
@@ -1323,10 +1326,55 @@ function drawChart(key, canvas, config) {
 }
 
 const euroTooltip = { callbacks: { label: (item) => `${item.dataset.label}: ${formatEuro(item.raw)}` } };
+
+// Sul telefono (schermo stretto) i grafici hanno meno etichette e più piccole
+const schermoStretto = () => window.innerWidth < 720;
+
+// Importi dell'asse in breve (12.500 -> "12,5k €"): occupano meno spazio
+function formatEuroBreve(valore) {
+  if (Math.abs(valore) < 1000) return `${valore.toLocaleString("it-IT")} €`;
+  return `${(valore / 1000).toLocaleString("it-IT", { maximumFractionDigits: 1 })}k €`;
+}
+
+// Legenda dei grafici a linee, a tre clic sulla stessa voce: il 1° la nasconde, il 2° mostra
+// solo lei, il 3° rimette tutto visibile. Su una voce nascosta, un clic la fa ricomparire.
+function clicLegenda(_evento, voce, legenda) {
+  const chart = legenda.chart;
+  const i = voce.datasetIndex;
+  const stessaVoce = chart.$legenda?.indice === i;
+  if (!stessaVoce && !chart.isDatasetVisible(i)) {
+    chart.setDatasetVisibility(i, true);
+    chart.$legenda = null;
+  } else {
+    const passo = stessaVoce ? chart.$legenda.passo + 1 : 1;
+    chart.data.datasets.forEach((_, j) => {
+      if (passo === 1 && j === i) chart.setDatasetVisibility(j, false);
+      if (passo === 2) chart.setDatasetVisibility(j, j === i);
+      if (passo === 3) chart.setDatasetVisibility(j, true);
+    });
+    chart.$legenda = passo === 3 ? null : { indice: i, passo };
+  }
+  chart.update();
+}
+
+const legendaSotto = () => ({
+  position: "bottom",
+  onClick: clicLegenda,
+  labels: { boxWidth: 12, font: { size: 11 }, padding: schermoStretto() ? 6 : 10 }
+});
+
+// Asse dei mesi: con un anno tutti i 12 mesi (etichetta e riga della griglia);
+// con tutti gli anni i mesi sono troppi e se ne vede solo una parte
+const asseMesi = () => ({
+  ticks: tuttiGliAnni()
+    ? { maxRotation: 0, autoSkip: true, maxTicksLimit: schermoStretto() ? 4 : 12 }
+    : { maxRotation: 0, autoSkip: false, font: { size: schermoStretto() ? 10 : 12 } }
+});
+
 // Asse in euro; la riga dello 0 è più marcata per vedere subito quando si va sotto
 const euroAxis = {
   y: {
-    ticks: { callback: (value) => formatEuro(value) },
+    ticks: { callback: (value) => formatEuroBreve(value) },
     grid: {
       color: (ctx) => (ctx.tick?.value === 0 ? "rgba(31, 42, 36, 0.55)" : "rgba(0, 0, 0, 0.1)"),
       lineWidth: (ctx) => (ctx.tick?.value === 0 ? 2 : 1)
@@ -1359,14 +1407,14 @@ function totaliCategorie(tipo) {
     .sort((a, b) => a.nome.localeCompare(b.nome, "it"));
 }
 
-// Posizione di oggi nel grafico mese per mese (null se il mese corrente non c'è): ogni punto
-// è il totale di un mese, quindi oggi cade tra il punto del mese scorso e quello del mese corrente
+// Posizione di oggi nel grafico mese per mese (null se il mese corrente non c'è): sul punto
+// del mese in corso il primo del mese, poi avanza verso il mese dopo con il passare dei giorni
 function posizioneOggiMesi(elenco) {
   const oggi = new Date();
   const i = elenco.findIndex((p) => p.anno === oggi.getFullYear() && p.mese === oggi.getMonth() + 1);
   if (i < 0) return null;
   const giorniMese = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 0).getDate();
-  return Math.max(0, i - 1 + oggi.getDate() / giorniMese);
+  return i + (oggi.getDate() - 1) / giorniMese;
 }
 
 // Mesi dopo quello in corso: nei grafici a linee restano senza punto
@@ -1400,7 +1448,7 @@ function renderCharts() {
       // Mesi del foglio "Pre 2023" (medie mensili): linea tratteggiata
       datasets: { line: { segment: { borderDash: (ctx) => (elenco[ctx.p1DataIndex]?.stima ? [5, 4] : undefined) } } },
       plugins: {
-        legend: { position: "bottom" },
+        legend: legendaSotto(),
         lineaOggi: { posizione: posizioneOggiMesi(elenco) },
         tooltip: {
           callbacks: {
@@ -1409,7 +1457,7 @@ function renderCharts() {
           }
         }
       },
-      scales: euroAxis,
+      scales: { ...euroAxis, x: asseMesi() },
       layout: { padding: { top: 14 } }
     },
     plugins: [lineaOggi]
@@ -1474,8 +1522,8 @@ function renderEntrateCharts() {
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       elements: { point: { radius: tuttiGliAnni() ? 0 : 3 } },
-      plugins: { legend: { position: "bottom" }, tooltip: euroTooltip },
-      scales: euroAxis
+      plugins: { legend: legendaSotto(), tooltip: euroTooltip },
+      scales: { ...euroAxis, x: asseMesi() }
     }
   });
 }
@@ -2095,7 +2143,7 @@ function renderInvestimentiCharts(righe, tipi) {
     options: {
       maintainAspectRatio: false,
       plugins: {
-        legend: { position: "right" },
+        legend: { position: schermoStretto() ? "bottom" : "right" },
         tooltip: {
           callbacks: {
             label: (item) => {
@@ -2136,7 +2184,7 @@ function renderInvestimentiCharts(righe, tipi) {
       interaction: { mode: "index", intersect: false },
       elements: { point: { radius: 0 }, line: { stepped: true } },
       plugins: {
-        legend: { position: "bottom" },
+        legend: legendaSotto(),
         lineaOggi: { posizione: punti.length ? giorno(oggi) : null },
         tooltip: {
           callbacks: {
@@ -2152,11 +2200,13 @@ function renderInvestimentiCharts(righe, tipi) {
           max: giorno(`${ultimoAnno + 1}-01-01`),
           afterBuildTicks: (scala) => {
             scala.ticks = [];
-            for (let anno = primoAnno; anno <= ultimoAnno + 1; anno += 1) scala.ticks.push({ value: giorno(`${anno}-01-01`) });
+            // sul telefono un anno sì e uno no, altrimenti le etichette si toccano
+            const passo = schermoStretto() ? 2 : 1;
+            for (let anno = primoAnno; anno <= ultimoAnno + 1; anno += passo) scala.ticks.push({ value: giorno(`${anno}-01-01`) });
           },
-          ticks: { callback: (valore) => new Date(valore).getFullYear() }
+          ticks: { callback: (valore) => new Date(valore).getFullYear(), maxRotation: 0, autoSkip: true }
         },
-        y: { ticks: { callback: (value) => formatEuro(value) } }
+        y: { ticks: { callback: (value) => formatEuroBreve(value) } }
       },
       layout: { padding: { top: 14 } }
     },
