@@ -2,7 +2,7 @@
   "name": "MyFinance",
   "short_name": "MyFinance",
   "description": "Movimenti, budget e riepilogo delle finanze personali.",
-  "id": "./",
+  "id": "/My-Finance/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
