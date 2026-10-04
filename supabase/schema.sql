@@ -171,6 +171,32 @@ select * from (values
 where not exists (select 1 from public.watchlist)
 on conflict (isin) do nothing;
 
+-- Conto Fineco: i movimenti dell'estratto conto Fineco così come sono ("+ Excel Fineco" in
+-- Posizioni). La somma degli importi è la liquidità sul conto. tipo è ricavato dalla
+-- descrizione: Titoli (compravendite), Cedole e dividendi (con le ritenute), Bonifici,
+-- Costi (bollo, Tobin tax, imposta sul capital gain), Interessi (sulla liquidità), Altro.
+-- Dalle righe di titoli, cedole e dividendi il sito propone le operazioni del registro.
+create table if not exists public.movimenti_fineco (
+  id bigint generated always as identity primary key,
+  data date not null,
+  data_valuta date,
+  importo numeric(12, 2) not null,
+  descrizione text not null default '',
+  descrizione_completa text not null default '',
+  tipo text not null check (tipo in ('Titoli', 'Cedole e dividendi', 'Bonifici', 'Costi', 'Interessi', 'Altro')),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists movimenti_fineco_data_idx on public.movimenti_fineco (data);
+
+-- Nome del titolo nell'estratto Fineco (es. "ISHS CR WD USD-AC") -> posizione del registro
+-- investimenti. Si sceglie nell'anteprima dell'import e viene ricordato.
+create table if not exists public.mappatura_titoli (
+  id bigint generated always as identity primary key,
+  nome_fineco text not null unique,
+  posizione integer not null
+);
+
 -- Mappatura "categoria della banca -> mia categoria", usata quando si importano
 -- gli estratti conto (dal sito con "+ Excel" o con import_excel.py)
 create table if not exists public.mappatura_categorie (
@@ -429,7 +455,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['categorie', 'movimenti', 'budget', 'saldi', 'riepiloghi_annuali', 'investimenti', 'mappatura_categorie', 'quotazioni', 'watchlist'] loop
+  foreach t in array array['categorie', 'movimenti', 'budget', 'saldi', 'riepiloghi_annuali', 'investimenti', 'mappatura_categorie', 'quotazioni', 'watchlist', 'movimenti_fineco', 'mappatura_titoli'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "accesso pubblico" on public.%I', t);
     execute format(

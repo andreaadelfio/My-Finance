@@ -9,12 +9,18 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon.svg">
-    <link rel="stylesheet" href="./assets/styles.css?v=26">
+    <link rel="stylesheet" href="./assets/styles.css?v=36">
   </head>
   <body>
     <div class="page-shell">
       <header class="top-bar">
         <h1>MyFinance</h1>
+        <!-- Ricarica accanto al titolo: sul telefono non occupa una riga a sé -->
+        <button id="refresh-button" class="icon-button" type="button" title="Ricarica" aria-label="Ricarica">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 12.65-5.65z"/>
+          </svg>
+        </button>
         <!-- Ogni sezione è un interruttore a più posizioni; per aggiungerne una basta un nuovo .switch-group -->
         <nav class="tabs" aria-label="Sezioni">
           <div class="switch-group current">
@@ -33,11 +39,6 @@
             </div>
           </div>
         </nav>
-        <button id="refresh-button" class="icon-button" type="button" title="Ricarica" aria-label="Ricarica">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 12.65-5.65z"/>
-          </svg>
-        </button>
       </header>
 
       <div id="feedback" class="feedback hidden"></div>
@@ -141,6 +142,7 @@
         </div>
 
         <p id="investimenti-sintesi" class="sintesi"></p>
+        <p id="fineco-sintesi" class="sintesi hidden"></p>
 
         <div class="charts investimenti-charts">
           <div class="chart-box">
@@ -160,13 +162,13 @@
         <h2>Posizioni aperte a prezzo di mercato <span class="unit">(€)</span></h2>
         <p class="hint">Se vendessi domani (esclusi i BTP). Quantità e ABP si inseriscono con le operazioni nel registro Investimenti: book value = quote × ABP (senza ABP, la somma degli acquisti registrati).</p>
         <div class="table-wrap">
-          <table id="mercato-table" class="summary-table"></table>
+          <table id="mercato-table" class="summary-table tabella-schede"></table>
         </div>
 
         <h2>Posizioni <span class="unit">(€)</span></h2>
         <p class="hint">Clicca un nome o un tipo per vedere le sue operazioni.</p>
         <div class="table-wrap">
-          <table id="posizioni-table" class="summary-table"></table>
+          <table id="posizioni-table" class="summary-table tabella-schede"></table>
         </div>
 
         <h2>Per tipo <span class="unit">(€)</span></h2>
@@ -196,7 +198,13 @@
           <h2>Operazioni</h2>
           <button id="i-nuova" class="primary-button" type="button" title="Aggiunge in cima alla tabella una riga da compilare (Invio salva, Esc annulla)">+ Nuova operazione</button>
           <button class="secondary-button aggiorna-prezzi" type="button" title="Prende da Yahoo Finance i prezzi di oggi e ricalcola la plusvalenza se vendessi domani (esclusi i BTP)">Aggiorna prezzi</button>
+          <button id="fineco-button" class="secondary-button excel-button" type="button" title="Importa l'estratto conto Fineco (movements_....xlsx): movimenti del conto e operazioni del registro">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm1 2v4h6V5H5zm8 0v4h6V5h-6zm-8 6v4h6v-4H5zm8 0v4h6v-4h-6zm-8 6v2h6v-2H5zm8 0v2h6v-2h-6z"/></svg>
+            + Excel Fineco
+          </button>
+          <input id="fineco-input" type="file" accept=".xlsx,.xls" hidden>
         </div>
+        <div id="fineco-panel" class="box hidden"></div>
         <div class="table-wrap">
           <table class="summary-table">
             <thead>
@@ -260,6 +268,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=36"></script>
+    <script type="module" src="./assets/app.js?v=49"></script>
   </body>
 </html>

@@ -17,6 +17,9 @@ const state = {
   importazione: null, // anteprima del file Excel in corso di importazione
   investimenti: [],
   quotazioni: new Map(), // posizione -> prezzo di oggi e plusvalenza (Edge Function "aggiorna-quotazioni")
+  fineco: null, // conto Fineco: { tipi: Map(tipo -> somma), liquidita, ultimaData }
+  costiFineco: [], // costi e interessi del conto Fineco, come righe (sola lettura) del registro
+  importFineco: null, // anteprima dell'estratto Fineco in corso di importazione
   watchlist: [], // titoli della sezione Proposte con segnale e motivi (senza lo storico, caricato a richiesta)
   graficoProposta: null, // ISIN con il grafico aperto nella sezione Proposte
   // Lista Movimenti: tutti gli anni, caricata a pagine mentre si scorre
@@ -87,6 +90,10 @@ const elements = {
   tipiTable: document.querySelector("#tipi-table"),
   operazioniBody: document.querySelector("#operazioni-body"),
   investimentiSintesi: document.querySelector("#investimenti-sintesi"),
+  finecoSintesi: document.querySelector("#fineco-sintesi"),
+  finecoButton: document.querySelector("#fineco-button"),
+  finecoInput: document.querySelector("#fineco-input"),
+  finecoPanel: document.querySelector("#fineco-panel"),
   aggiornaPrezzi: [...document.querySelectorAll(".aggiorna-prezzi")], // Dashboard investimenti e registro
   quotazioniInfo: document.querySelector("#quotazioni-info"),
   viewProposte: document.querySelector("#view-proposte"),
@@ -247,6 +254,24 @@ async function loadData() {
     valore: numero(q.valore),
     plusvalenza: numero(q.plusvalenza)
   }]));
+
+  // Conto Fineco: totali per tipo sommati dal database (anche questa tabella è facoltativa)
+  const fineco = await state.supabase.from("movimenti_fineco").select("tipo,importo.sum(),data.max()");
+  const perTipo = fineco.data || [];
+  state.fineco = !perTipo.length ? null : {
+    tipi: new Map(perTipo.map((r) => [r.tipo, Number(r.sum)])),
+    liquidita: round2(perTipo.reduce((s, r) => s + Number(r.sum), 0)),
+    ultimaData: perTipo.map((r) => r.max).sort().at(-1)
+  };
+  // Costi (bollo, Tobin tax, imposte) e interessi sulla liquidità del conto Fineco: non sono
+  // operazioni del registro (non appartengono a una posizione) ma si vedono accanto a esse,
+  // in sola lettura, e contano nei totali e nel grafico degli investimenti
+  const costi = await state.supabase.from("movimenti_fineco").select("*").in("tipo", ["Costi", "Interessi"]).order("data");
+  state.costiFineco = (costi.data || []).map((r) => ({
+    id: `fineco-${r.id}`, fineco: true, posizione: null, data: r.data, nome: r.descrizione, tipo: "Conto Fineco",
+    operazione: r.tipo === "Costi" ? "Costi e tasse" : "Interessi liquidità",
+    quantita: null, abp: null, importo: Number(r.importo), note: r.descrizione_completa, domani: false
+  }));
 
   // Watchlist senza lo storico (pesante: si carica solo per il grafico di un titolo)
   const watchlist = await state.supabase.from("watchlist").select(COLONNE_WATCHLIST);
@@ -1341,11 +1366,10 @@ function formatEuroBreve(valore) {
   return `${(valore / 1000).toLocaleString("it-IT", { maximumFractionDigits: 1 })}k €`;
 }
 
-// Legenda dei grafici a linee, a tre clic sulla stessa voce: il 1° la nasconde, il 2° mostra
-// solo lei, il 3° rimette tutto visibile. Su una voce nascosta, un clic la fa ricomparire.
-function clicLegenda(_evento, voce, legenda) {
-  const chart = legenda.chart;
-  const i = voce.datasetIndex;
+// Voci della riga dei valori (fa da legenda), a tre clic sulla stessa voce: il 1° nasconde
+// la linea, il 2° mostra solo lei, il 3° rimette tutto visibile. Su una voce nascosta
+// (barrata), un clic la fa ricomparire.
+function cicloLinee(chart, i) {
   const stessaVoce = chart.$legenda?.indice === i;
   if (!stessaVoce && !chart.isDatasetVisible(i)) {
     chart.setDatasetVisibility(i, true);
@@ -1364,9 +1388,10 @@ function clicLegenda(_evento, voce, legenda) {
   if (chart.$titoloValori) mostraValori(chart, chart.$indiceValori);
 }
 
-// Valori sotto il grafico, al posto del riquadro scuro di Chart.js che con tante linee copre
-// tutto: passando il mouse (o il dito) sul grafico, la riga sotto mostra la data e i valori di
-// quel punto. chart.$titoloValori(i) dà la data del punto i.
+// Riga dei valori sotto il grafico, al posto della legenda e del riquadro scuro di Chart.js
+// (che con tante linee copriva tutto): passando il mouse (o il dito) sul grafico mostra la
+// data e i valori di quel punto, con il colore di ogni linea; le linee nascoste restano
+// barrate per poterle rimettere. chart.$titoloValori(i) dà la data del punto i.
 const valoreY = (punto) => (punto !== null && typeof punto === "object" ? punto.y : punto);
 
 function mostraValori(chart, indice) {
@@ -1375,34 +1400,40 @@ function mostraValori(chart, indice) {
     riga = document.createElement("p");
     riga.className = "valori-grafico";
     chart.canvas.parentElement.after(riga);
+    // clic su una voce: nascondi / solo questa / tutte (vedi cicloLinee)
+    riga.addEventListener("click", (event) => {
+      const voce = event.target.closest(".valore[data-indice]");
+      if (voce) cicloLinee(riga.$chart, Number(voce.dataset.indice));
+    });
   }
+  riga.$chart = chart;
   chart.$indiceValori = indice;
   if (indice === null || indice < 0) {
     riga.textContent = "";
     return;
   }
-  const valori = chart.data.datasets
-    .map((dataset, i) => ({ dataset, valore: chart.isDatasetVisible(i) ? valoreY(dataset.data[indice]) : null }))
-    .filter(({ valore }) => valore !== null && valore !== undefined && valore !== 0);
-  // Con tante linee (categorie) dal valore più grande; altrimenti nell'ordine della legenda
-  if (chart.data.datasets.length > 4) valori.sort((a, b) => Math.abs(b.valore) - Math.abs(a.valore));
+  const voci = chart.data.datasets
+    .map((dataset, i) => ({ dataset, i, visibile: chart.isDatasetVisible(i), valore: valoreY(dataset.data[indice]) }))
+    .filter((v) => !v.visibile || (v.valore !== null && v.valore !== undefined && v.valore !== 0));
+  // Con tante linee (categorie) dal valore più grande; altrimenti nell'ordine delle linee.
+  // Le nascoste in fondo.
+  const peso = (v) => (v.visibile ? Math.abs(v.valore) : -1);
+  if (chart.data.datasets.length > 5) voci.sort((a, b) => peso(b) - peso(a));
+  else voci.sort((a, b) => b.visibile - a.visibile);
   riga.innerHTML = `<strong>${escapeHtml(chart.$titoloValori(indice))}</strong>${
-    valori.length
-      ? valori.map(({ dataset, valore }) => `<span class="valore"><i style="background:${dataset.borderColor}"></i>${escapeHtml(dataset.label)} <b>${formatEuro(valore)}</b></span>`).join("")
+    voci.length
+      ? voci.map(({ dataset, i, visibile, valore }) => `<span class="valore ${visibile ? "" : "nascosta"}" data-indice="${i}" title="Clic: nascondi · di nuovo: solo questa · di nuovo: tutte"><i style="background:${dataset.borderColor}"></i>${escapeHtml(dataset.label)}${visibile ? ` <b>${formatEuro(valore)}</b>` : ""}</span>`).join("")
       : '<span class="zero">nessun valore</span>'
   }`;
 }
 
-// Opzione tooltip dei grafici a linee: niente riquadro, aggiorna la riga dei valori.
-// Sul computer la riga compare passando il mouse (e si chiude cliccando altrove); sul
-// telefono si vede solo con il grafico in primo piano.
+// Opzione tooltip dei grafici a linee: niente riquadro, aggiorna la riga dei valori
+// (sul telefono la riga si vede solo con il grafico in primo piano)
 const valoriSottoIlGrafico = {
   enabled: false,
   external: ({ chart, tooltip }) => {
     const indice = tooltip.dataPoints?.[0]?.dataIndex;
-    if (indice === undefined || tooltip.opacity === 0) return;
-    if (indice !== chart.$indiceValori) mostraValori(chart, indice);
-    if (!schermoStretto()) chart.canvas.closest(".chart-box").classList.add("mostra-valori");
+    if (indice !== undefined && tooltip.opacity !== 0 && indice !== chart.$indiceValori) mostraValori(chart, indice);
   }
 };
 
@@ -1418,14 +1449,6 @@ function apriPrimoPiano(box) {
 function chiudiPrimoPiano() {
   document.querySelectorAll(".chart-box.primo-piano").forEach((box) => box.classList.remove("primo-piano"));
   document.body.classList.remove("con-primo-piano");
-}
-
-// Computer: un clic fuori dal grafico e dalla riga dei valori chiude la riga
-function chiudiValoriFuori(event) {
-  document.querySelectorAll(".chart-box.mostra-valori").forEach((box) => {
-    const dentro = box.querySelector(".chart-canvas").contains(event.target) || box.querySelector(".valori-grafico")?.contains(event.target);
-    if (!dentro) box.classList.remove("mostra-valori");
-  });
 }
 
 // Dopo aver disegnato un grafico a linee: titolo dei punti e valori iniziali (l'ultimo punto
@@ -1458,11 +1481,8 @@ const lineaCursore = {
   }
 };
 
-const legendaSotto = () => ({
-  position: "bottom",
-  onClick: clicLegenda,
-  labels: { boxWidth: 12, font: { size: 11 }, padding: schermoStretto() ? 6 : 10 }
-});
+// Grafici a linee senza legenda: ne fa le veci la riga dei valori sotto il grafico
+const senzaLegenda = () => ({ display: false });
 
 // Asse dei mesi: con un anno tutti i 12 mesi (etichetta e riga della griglia);
 // con tutti gli anni i mesi sono troppi e se ne vede solo una parte
@@ -1549,7 +1569,7 @@ function renderCharts() {
       // Mesi del foglio "Pre 2023" (medie mensili): linea tratteggiata
       datasets: { line: { segment: { borderDash: (ctx) => (elenco[ctx.p1DataIndex]?.stima ? [5, 4] : undefined) } } },
       plugins: {
-        legend: legendaSotto(),
+        legend: senzaLegenda(),
         lineaOggi: { posizione: posizioneOggiMesi(elenco) },
         tooltip: valoriSottoIlGrafico
       },
@@ -1624,7 +1644,7 @@ function renderCategorieCharts(tipo) {
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
       elements: { point: { radius: tuttiGliAnni() ? 0 : 3 } },
-      plugins: { legend: legendaSotto(), tooltip: valoriSottoIlGrafico, lineaOggi: { posizione: posizioneOggiMesi(elenco) } },
+      plugins: { legend: senzaLegenda(), tooltip: valoriSottoIlGrafico, lineaOggi: { posizione: posizioneOggiMesi(elenco) } },
       scales: { ...euroAxis, x: asseMesi() },
       layout: { padding: { top: 14 } }
     },
@@ -1658,6 +1678,388 @@ async function saveBudget(input) {
   }
   showFeedback(`Budget ${state.year} salvato.`);
   await reload();
+}
+
+// ---------------------------------------------------------------------------
+// Estratto conto Fineco ("+ Excel Fineco" in Posizioni)
+// Tutte le righe del file vanno in movimenti_fineco (senza doppioni): la loro somma è la
+// liquidità sul conto. Da compravendite, cedole e dividendi il sito propone le operazioni
+// del registro che mancano, collegate alla posizione dal nome Fineco del titolo
+// (tabella mappatura_titoli, scelto nell'anteprima e poi ricordato).
+// ---------------------------------------------------------------------------
+
+function tipoFineco(descrizione) {
+  const d = descrizione.toLowerCase();
+  if (d.startsWith("compravendita")) return "Titoli";
+  if (/cedol|dividend|div\./.test(d)) return "Cedole e dividendi";
+  if (d.includes("portaf")) return "Interessi"; // interessi sulla liquidità e la loro ritenuta
+  if (d.startsWith("bonifico")) return "Bonifici";
+  if (/imposta|bollo|tobin|commission/.test(d)) return "Costi";
+  return "Altro";
+}
+
+function chiaveFineco(riga) {
+  return `${riga.data}|${Number(riga.importo).toFixed(2)}|${normalize(riga.descrizione_completa)}`;
+}
+
+// Intestazione "Data_Operazione | Data_Valuta | Entrate | Uscite | Descrizione |
+// Descrizione_Completa | Stato": si tengono solo i movimenti contabilizzati
+function leggiFineco(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const righe = window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+  const inizio = righe.findIndex((r) => String(r[0] ?? "").trim() === "Data_Operazione");
+  if (inizio === -1) return null;
+  const testo = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
+  const numero = (v) => (typeof v === "number" ? v : parseAmount(v) || 0);
+  const saldo = righe.slice(0, inizio).map((r) => testo(r[0])).find((t) => t.startsWith("Saldo Finale"));
+  const movimenti = righe.slice(inizio + 1).map((r) => {
+    const data = excelDate(r[0]);
+    const importo = round2(numero(r[2]) + numero(r[3]));
+    if (!data || !importo || (r[6] && testo(r[6]) !== "Contabilizzato")) return null;
+    const descrizione = testo(r[4]);
+    return { data, data_valuta: excelDate(r[1]), importo, descrizione, descrizione_completa: testo(r[5]), tipo: tipoFineco(descrizione) };
+  }).filter(Boolean);
+  return { movimenti, saldoFinale: saldo ? parseAmount(saldo.split(":")[1]) : null };
+}
+
+// Nome del titolo (e quantità per le compravendite) dalla descrizione completa
+function titoloFineco(movimento) {
+  const c = movimento.descrizione_completa;
+  const compravendita = c.match(/Compravendita Titoli (.+?) Qta\/Val\.nom\.\s*([\d.,]+)/i);
+  if (compravendita) {
+    const nome = compravendita[1].trim();
+    const valore = parseAmount(compravendita[2]);
+    // Per i BTP Fineco dà il valore nominale: nel registro la quantità è in titoli da 1000 €
+    return { nome, quantita: /^BTP/i.test(nome) ? valore / 1000 : valore };
+  }
+  const nome = c
+    .replace(/^(Rit\.ced\.su|Ced\.su|Rit\.div\.su|Div\.su|Acc\.div\.Port\.Rem\.|Add\.rit\.Port\.Rem\.)\s*/i, "")
+    .replace(/^[\d.,]+\s+/, "")
+    .trim();
+  return { nome, quantita: null };
+}
+
+// Operazioni del file: acquisti, vendite, cedole e dividendi al netto della ritenuta dello
+// stesso giorno sullo stesso titolo (lordo tenuto a parte per il confronto con il registro)
+function operazioniFineco(movimenti) {
+  const operazioni = [];
+  const cedole = new Map();
+  for (const m of movimenti) {
+    const { nome, quantita } = titoloFineco(m);
+    if (m.tipo === "Titoli") {
+      operazioni.push({ tipo: m.importo < 0 ? "acquisto" : "vendita", data: m.data, nome, quantita, importo: m.importo, righe: [m] });
+    } else if (m.tipo === "Cedole e dividendi") {
+      const chiave = `${m.data}|${nome.replace(/\s+/g, "").toUpperCase()}`;
+      const op = cedole.get(chiave) || { tipo: "cedola", data: m.data, nome, quantita: null, importo: 0, lordo: 0, dividendo: false, righe: [] };
+      op.importo = round2(op.importo + m.importo);
+      if (m.importo > 0) {
+        op.lordo = round2(op.lordo + m.importo);
+        op.nome = nome; // il nome giusto è quello della riga lorda (le ritenute a volte lo spezzano)
+      }
+      if (/div/i.test(m.descrizione)) op.dividendo = true;
+      op.righe.push(m);
+      cedole.set(chiave, op);
+    }
+  }
+  return [...operazioni, ...[...cedole.values()].filter((op) => op.lordo > 0)].sort((a, b) => a.data.localeCompare(b.data));
+}
+
+// Operazione del registro corrispondente: stesso tipo, data entro 10 giorni (il registro usa
+// spesso la data dell'ordine, Fineco quella di contabilizzazione) e stesso importo; per le
+// cedole va bene anche il lordo; per le vendite rimborso + guadagno dello stesso giorno
+function trovaNelRegistro(op, registro, usate) {
+  const giorni = (a, b) => Math.abs(new Date(a) - new Date(b)) / 86400000;
+  const circa = (a, b, tolleranza = 0.02) => Math.abs(Math.abs(a) - Math.abs(b)) <= tolleranza;
+  const vicine = registro.filter((r) => !usate.has(r.id) && giorni(r.data, op.data) <= 10);
+  if (op.tipo === "acquisto") return { riga: vicine.find((r) => r.operazione === "Investimento" && circa(r.importo, op.importo)), altre: [] };
+  if (op.tipo === "cedola") {
+    return { riga: vicine.find((r) => ["Cedola", "Dividendi"].includes(r.operazione) && (circa(r.importo, op.importo) || circa(r.importo, op.lordo))), altre: [] };
+  }
+  for (const r of vicine.filter((v) => v.operazione === "Rimborso")) {
+    const guadagni = registro.filter((g) => g.posizione === r.posizione && g.data === r.data && g.operazione === "Cedola" && !usate.has(g.id));
+    const totale = r.importo + guadagni.reduce((s, g) => s + g.importo, 0);
+    const stesseQuote = r.quantita == null || op.quantita == null || circa(r.quantita, op.quantita, 0.001);
+    if (Math.abs(totale - op.importo) <= 5 && stesseQuote) return { riga: r, altre: guadagni };
+  }
+  return { riga: null, altre: [] };
+}
+
+async function handleFinecoFile(file) {
+  elements.finecoInput.value = "";
+  if (!file) return;
+  elements.finecoButton.disabled = true;
+  try {
+    await loadSheetJS();
+    const letto = leggiFineco(window.XLSX.read(await file.arrayBuffer(), { type: "array" }));
+    if (!letto?.movimenti.length) {
+      showFeedback("Non sembra un estratto conto Fineco: manca la riga di intestazione \"Data_Operazione\".", "error");
+      return;
+    }
+    const [esistenti, mappatura] = await Promise.all([
+      fetchAll(() => state.supabase.from("movimenti_fineco").select("data,importo,descrizione_completa").order("id")),
+      fetchAll(() => state.supabase.from("mappatura_titoli").select("*").order("id"))
+    ]);
+    // Movimenti nuovi: come per l'estratto Intesa, i doppioni veri si contano
+    const presenti = new Map();
+    for (const r of esistenti) presenti.set(chiaveFineco(r), (presenti.get(chiaveFineco(r)) || 0) + 1);
+    const nuovi = letto.movimenti.filter((m) => {
+      const chiave = chiaveFineco(m);
+      if (!presenti.get(chiave)) return true;
+      presenti.set(chiave, presenti.get(chiave) - 1);
+      return false;
+    });
+
+    // Operazioni del file confrontate con il registro (tutte, anche quelle di movimenti già
+    // importati, così le righe del registro che corrispondono non risultano "non trovate")
+    const registro = state.investimenti.filter((r) => !r.domani);
+    const usate = new Set();
+    const posizioni = new Map(mappatura.map((r) => [r.nome_fineco, r.posizione]));
+    const periodi = new Map(); // nome Fineco -> Map(posizione -> { dal, al }) dalle operazioni trovate
+    const nuoviSet = new Set(nuovi);
+    const operazioni = operazioniFineco(letto.movimenti);
+    for (const op of operazioni) {
+      const { riga, altre } = trovaNelRegistro(op, registro, usate);
+      op.nuova = op.righe.some((m) => nuoviSet.has(m));
+      if (!riga) continue;
+      op.trovata = riga;
+      [riga, ...altre].forEach((r) => usate.add(r.id));
+      // la posizione di un titolo si impara dalle operazioni già registrate (vince la più recente)
+      if (!mappatura.some((m) => m.nome_fineco === op.nome)) posizioni.set(op.nome, riga.posizione);
+      if (!periodi.has(op.nome)) periodi.set(op.nome, new Map());
+      const periodo = periodi.get(op.nome).get(riga.posizione) || { dal: op.data, al: op.data };
+      periodi.get(op.nome).set(riga.posizione, { dal: periodo.dal < op.data ? periodo.dal : op.data, al: periodo.al > op.data ? periodo.al : op.data });
+    }
+    const date = letto.movimenti.map((m) => m.data).sort();
+    state.importFineco = {
+      nomeFile: file.name, movimenti: letto.movimenti, nuovi, saldoFinale: letto.saldoFinale,
+      dal: date[0], al: date[date.length - 1], operazioni, posizioni, periodi, usate,
+      scelte: new Map(), // nome Fineco -> posizione scelta nell'anteprima (numero o "nuova")
+      escluse: new Set(), // operazioni proposte non spuntate
+      tenute: new Set() // righe del registro "non trovate" da non eliminare
+    };
+    renderFinecoPanel();
+  } catch (error) {
+    console.error(error);
+    showFeedback(`File non letto: ${error.message}`, "error");
+  } finally {
+    elements.finecoButton.disabled = false;
+  }
+}
+
+function posizioneScelta(imp, nome) {
+  return imp.scelte.has(nome) ? imp.scelte.get(nome) : imp.posizioni.get(nome);
+}
+
+// Stesso titolo in più posizioni (es. NVIDIA comprata, venduta e ricomprata): vale quella
+// attiva in quella data, con 30 giorni di margine dopo l'ultima operazione per i dividendi
+function posizionePerData(imp, nome, data) {
+  const periodi = imp.periodi.get(nome);
+  if (!data || imp.scelte.has(nome) || !periodi || periodi.size < 2) return undefined;
+  const conMargine = (iso) => new Date(new Date(iso).getTime() + 30 * 86400000).toISOString().slice(0, 10);
+  return [...periodi.entries()].find(([, p]) => data >= p.dal && data <= conMargine(p.al))?.[0];
+}
+
+// Posizione numerica di un titolo: le "nuove" prendono i numeri dopo l'ultimo usato
+function posizioneEffettiva(imp, nome, data = null) {
+  const scelta = posizionePerData(imp, nome, data) ?? posizioneScelta(imp, nome);
+  if (scelta !== "nuova") return scelta;
+  const nuove = [...new Set(imp.operazioni.map((o) => o.nome))].filter((n) => posizioneScelta(imp, n) === "nuova");
+  return Math.max(-1, ...state.investimenti.map((r) => r.posizione)) + 1 + nuove.indexOf(nome);
+}
+
+function nomePosizione(posizione) {
+  return state.investimenti.find((r) => r.posizione === posizione)?.nome || null;
+}
+
+// Righe del registro (acquisti) delle posizioni Fineco, nel periodo del file, senza
+// corrispondenza su Fineco: di solito righe aggregate (es. più acquisti in una riga)
+function righeNonTrovate(imp) {
+  const posizioniFineco = new Set(imp.operazioni.map((o) => posizioneEffettiva(imp, o.nome, o.data)).filter((p) => p !== undefined));
+  return state.investimenti.filter((r) => !r.domani && r.operazione === "Investimento" && posizioniFineco.has(r.posizione)
+    && r.data >= imp.dal && r.data <= imp.al && !imp.usate.has(r.id));
+}
+
+// Prezzo medio di carico prima di una vendita: l'ABP del conto se registrato, altrimenti
+// il costo medio degli acquisti (registro e questo import)
+function prezzoCarico(imp, posizione, data, eliminate) {
+  const conAbp = state.investimenti.filter((r) => r.posizione === posizione && r.abp > 0 && r.data <= data).sort((a, b) => a.data.localeCompare(b.data));
+  if (conAbp.length) return conAbp[conAbp.length - 1].abp;
+  const acquisti = [
+    ...state.investimenti.filter((r) => !r.domani && r.posizione === posizione && r.operazione === "Investimento" && r.data < data && !eliminate.has(r.id)),
+    ...imp.proposte.filter((o) => o.tipo === "acquisto" && o.data < data && posizioneEffettiva(imp, o.nome, o.data) === posizione)
+  ];
+  const quote = acquisti.reduce((s, a) => s + (a.quantita || 0), 0);
+  return quote ? acquisti.reduce((s, a) => s - a.importo, 0) / quote : null;
+}
+
+// Righe da inserire nel registro per un'operazione proposta
+function righeRegistro(imp, op, eliminate = new Set()) {
+  const posizione = posizioneEffettiva(imp, op.nome, op.data);
+  const modello = state.investimenti.find((r) => r.posizione === posizione) || {};
+  const base = {
+    posizione, data: op.data, nome: modello.nome || op.nome, isin: modello.isin ?? null,
+    prodotto: modello.prodotto ?? null, tipo: modello.tipo ?? null,
+    note: `Fineco: ${op.righe[0].descrizione_completa}`.slice(0, 200)
+  };
+  if (op.tipo === "acquisto") return [{ ...base, operazione: "Investimento", quantita: op.quantita, importo: op.importo }];
+  if (op.tipo === "cedola") return [{ ...base, operazione: op.dividendo ? "Dividendi" : "Cedola", quantita: null, importo: op.importo }];
+  // Vendita: come nel registro, rimborso al prezzo di carico + guadagno (o perdita) come cedola
+  const carico = prezzoCarico(imp, posizione, op.data, eliminate);
+  const rimborso = carico && op.quantita ? round2(carico * op.quantita) : op.importo;
+  const righe = [{ ...base, operazione: "Rimborso", quantita: op.quantita, importo: rimborso }];
+  if (round2(op.importo - rimborso)) righe.push({ ...base, operazione: "Cedola", quantita: op.quantita, importo: round2(op.importo - rimborso) });
+  return righe;
+}
+
+function renderFinecoPanel() {
+  const imp = state.importFineco;
+  if (!imp) {
+    elements.finecoPanel.classList.add("hidden");
+    return;
+  }
+  imp.proposte = imp.operazioni.filter((op) => !op.trovata && op.nuova);
+  const giaPresenti = imp.operazioni.filter((op) => op.trovata);
+  const nonTrovate = righeNonTrovate(imp);
+  const eliminate = new Set(nonTrovate.filter((r) => !imp.tenute.has(r.id)).map((r) => r.id));
+  const nomi = [...new Set(imp.proposte.map((op) => op.nome))];
+  const daFare = imp.nuovi.length || imp.proposte.length || nonTrovate.length;
+
+  // Movimenti nuovi del conto per tipo, e saldo dopo l'import confrontato con quello di Fineco
+  const perTipo = new Map();
+  for (const m of imp.nuovi) {
+    const t = perTipo.get(m.tipo) || { n: 0, totale: 0 };
+    t.n += 1;
+    t.totale = round2(t.totale + m.importo);
+    perTipo.set(m.tipo, t);
+  }
+  const saldoDopo = round2((state.fineco?.liquidita || 0) + imp.nuovi.reduce((s, m) => s + m.importo, 0));
+  const saldoOk = imp.saldoFinale === null || Math.abs(saldoDopo - imp.saldoFinale) < 0.01;
+
+  const posizioniNote = [...new Map(state.investimenti.map((r) => [r.posizione, r.nome])).entries()].sort((a, b) => a[0] - b[0]);
+  const sceltaNome = (nome) => {
+    const scelta = posizioneScelta(imp, nome);
+    return `<select class="fineco-scelta" data-nome="${escapeHtml(nome)}" aria-label="Posizione per ${escapeHtml(nome)}">
+      <option value="" ${scelta === undefined ? "selected" : ""}>— scegli —</option>
+      ${posizioniNote.map(([p, n]) => `<option value="${p}" ${scelta === p ? "selected" : ""}>${p} · ${escapeHtml(n)}</option>`).join("")}
+      <option value="nuova" ${scelta === "nuova" ? "selected" : ""}>Nuova posizione "${escapeHtml(nome)}"</option>
+    </select>`;
+  };
+  const descrizioneOp = (op) => {
+    const posizione = posizioneEffettiva(imp, op.nome, op.data);
+    if (posizione === undefined) return '<em class="negative">posizione da scegliere</em>';
+    return righeRegistro(imp, op, eliminate)
+      .map((r) => `${r.operazione} ${formatNumber(r.importo)}`).join(" + ") + ` <span class="hint">(posizione ${posizione})</span>`;
+  };
+
+  elements.finecoPanel.innerHTML = `
+    <h2>Estratto Fineco "${escapeHtml(imp.nomeFile)}"</h2>
+    <p>${imp.movimenti.length} movimenti nel file (dal ${formatDate(imp.dal)} al ${formatDate(imp.al)}):
+      <strong>${imp.nuovi.length} nuovi</strong>, ${imp.movimenti.length - imp.nuovi.length} già importati.
+      ${[...perTipo.entries()].map(([tipo, t]) => `${tipo} ${t.n} (${formatEuro(t.totale)})`).join(" · ")}</p>
+    <p>Liquidità sul conto dopo l'import: <strong>${formatEuro(saldoDopo)}</strong>
+      ${imp.saldoFinale === null ? "" : saldoOk
+        ? `<span class="positive">= saldo finale Fineco</span>`
+        : `<span class="negative">diversa dal saldo finale Fineco (${formatEuro(imp.saldoFinale)}): manca qualche movimento più vecchio?</span>`}</p>
+
+    ${nomi.length ? `
+      <h2>Titoli → posizione del registro</h2>
+      <p class="hint">Scegli una volta a quale posizione corrisponde ogni nome Fineco: viene ricordato.</p>
+      <div class="table-wrap"><table class="summary-table">
+        <tbody>${nomi.map((nome) => `<tr><th>${escapeHtml(nome)}</th><td>${sceltaNome(nome)}</td></tr>`).join("")}</tbody>
+      </table></div>` : ""}
+
+    <h2>Operazioni da aggiungere al registro (${imp.proposte.length})</h2>
+    ${imp.proposte.length ? `
+      <div class="table-wrap import-preview"><table class="summary-table">
+        <thead><tr><th></th><th>Data</th><th>Titolo Fineco</th><th class="num">Quantità</th><th>Nel registro</th></tr></thead>
+        <tbody>${imp.proposte.map((op, i) => `
+          <tr>
+            <td><input class="fineco-op" type="checkbox" data-indice="${i}" ${imp.escluse.has(i) ? "" : "checked"} aria-label="Importa"></td>
+            <td>${formatDate(op.data)}</td>
+            <td>${escapeHtml(op.nome)}</td>
+            <td class="num">${op.quantita === null ? "" : formatQuantity(op.quantita)}</td>
+            <td>${descrizioneOp(op)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>` : '<p class="hint">Nessuna: il registro ha già tutte le operazioni del file.</p>'}
+
+    ${nonTrovate.length ? `
+      <h2>Nel registro ma non su Fineco (${nonTrovate.length})</h2>
+      <p class="hint">Acquisti delle stesse posizioni, nel periodo del file, che Fineco non ha: di solito righe che
+        riassumono più acquisti. Spuntate = vengono eliminate, al loro posto restano gli acquisti veri qui sopra.</p>
+      <div class="table-wrap"><table class="summary-table">
+        <tbody>${nonTrovate.map((r) => `
+          <tr>
+            <td><input class="fineco-elimina" type="checkbox" data-id="${r.id}" ${imp.tenute.has(r.id) ? "" : "checked"} aria-label="Elimina"></td>
+            <td>${formatDate(r.data)}</td><td>${r.posizione} · ${escapeHtml(r.nome)}</td>
+            <td class="num">${formatQuantity(r.quantita)}</td><td class="num negative">${formatNumber(r.importo)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>` : ""}
+
+    ${giaPresenti.length ? `
+      <details>
+        <summary>${giaPresenti.length} operazioni del file già nel registro (saltate)</summary>
+        <div class="table-wrap import-preview"><table class="summary-table">
+          <tbody>${giaPresenti.map((op) => `
+            <tr><td>${formatDate(op.data)}</td><td>${escapeHtml(op.nome)}</td><td class="num">${formatNumber(op.importo)}</td>
+              <td>→ ${formatDate(op.trovata.data)} ${op.trovata.operazione} ${formatNumber(op.trovata.importo)} (posizione ${op.trovata.posizione})</td></tr>`).join("")}
+          </tbody>
+        </table></div>
+      </details>` : ""}
+
+    <div class="box-actions">
+      ${daFare ? '<button id="fineco-confirm" class="primary-button" type="button">Importa</button>' : ""}
+      <button id="fineco-cancel" class="secondary-button" type="button">${daFare ? "Annulla" : "Chiudi"}</button>
+    </div>`;
+  elements.finecoPanel.classList.remove("hidden");
+}
+
+async function confermaFineco() {
+  const imp = state.importFineco;
+  const selezionate = imp.proposte.filter((_, i) => !imp.escluse.has(i));
+  const senzaPosizione = [...new Set(selezionate.filter((op) => posizioneEffettiva(imp, op.nome, op.data) === undefined).map((op) => op.nome))];
+  if (senzaPosizione.length) {
+    showFeedback(`Scegli la posizione per: ${senzaPosizione.join(", ")}.`, "error");
+    return;
+  }
+  const eliminate = new Set(righeNonTrovate(imp).filter((r) => !imp.tenute.has(r.id)).map((r) => r.id));
+  const righe = selezionate.flatMap((op) => righeRegistro(imp, op, eliminate));
+  const mappatura = [...new Set(imp.operazioni.map((o) => o.nome))]
+    .map((nome) => ({ nome_fineco: nome, posizione: posizioneEffettiva(imp, nome) }))
+    .filter((m) => m.posizione !== undefined);
+  const bottone = document.querySelector("#fineco-confirm");
+  bottone.disabled = true;
+  bottone.textContent = "Importazione...";
+  try {
+    // Prima il registro, poi i movimenti del conto: se qualcosa va storto, reimportando lo
+    // stesso file le operazioni già aggiunte risultano "già nel registro"
+    if (eliminate.size) {
+      const { error } = await state.supabase.from("investimenti").delete().in("id", [...eliminate]);
+      if (error) throw error;
+    }
+    if (righe.length) {
+      const { error } = await state.supabase.from("investimenti").insert(righe);
+      if (error) throw error;
+    }
+    if (mappatura.length) {
+      const { error } = await state.supabase.from("mappatura_titoli").upsert(mappatura, { onConflict: "nome_fineco" });
+      if (error) throw error;
+    }
+    for (let i = 0; i < imp.nuovi.length; i += 500) {
+      const { error } = await state.supabase.from("movimenti_fineco").insert(imp.nuovi.slice(i, i + 500));
+      if (error) throw error;
+    }
+    showFeedback(`Fineco: ${imp.nuovi.length} movimenti del conto, ${righe.length} righe aggiunte al registro${eliminate.size ? `, ${eliminate.size} eliminate` : ""}.`);
+    state.importFineco = null;
+    renderFinecoPanel();
+    await reload();
+  } catch (error) {
+    console.error(error);
+    showFeedback(`Importazione non riuscita: ${error.message}`, "error");
+    bottone.disabled = false;
+    bottone.textContent = "Importa";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1772,8 +2174,15 @@ function renderMercato() {
       <th class="num" title="Plusvalenza meno la tassa del ${ALIQUOTA_PLUSVALENZE * 100}% (se positiva)">Netto</th>
     </tr></thead>
     <tbody>${righe.map((q) => {
-      // ABP usato: quello dell'operazione più recente o costo / quote degli acquisti registrati
+      // ABP usato: quello dell'operazione più recente o costo / quote degli acquisti registrati.
+      // Il calcolato è esatto se gli acquisti sono tutti registrati e non ci sono state vendite
+      // parziali; altrimenti è in grigio (meglio copiare quello del conto)
       const abp = abpPosizione(q.posizione) || (q.quote ? q.costo / q.quote : null);
+      const dalConto = Boolean(abpPosizione(q.posizione));
+      const incerto = !dalConto && (q.quote_stimate || haVenditeParziali(q.posizione));
+      const origineAbp = dalConto ? "Dal conto (copiato nel registro)"
+        : incerto ? "Stimato: quote stimate o vendite parziali, copia l'ABP dal conto nel registro"
+          : "Calcolato dagli acquisti registrati: costo / quote";
       const diff = q.prezzo !== null && abp ? q.prezzo - abp : null;
       const netto = q.plusvalenza === null ? null : q.plusvalenza - tassaPlusvalenza(q.posizione);
       return `
@@ -1781,7 +2190,7 @@ function renderMercato() {
         <th class="clickable" data-posizione="${q.posizione}">${escapeHtml(nomi.get(q.posizione) || q.isin)}</th>
         <td class="num">${q.posizione}</td>
         <td class="num">${q.prezzo === null ? "" : suggerito(q.prezzo, 4)}</td>
-        <td class="num ${abpPosizione(q.posizione) ? "" : "calcolato"}" title="${abpPosizione(q.posizione) ? "Dal conto (modulo Investimenti)" : "Calcolato dagli acquisti registrati"}">${abp === null ? "" : suggerito(abp, 4)}</td>
+        <td class="num ${incerto ? "calcolato" : ""}" title="${origineAbp}">${abp === null ? "" : suggerito(abp, 4)}</td>
         <td class="num ${diff < 0 ? "negative" : "positive"}">${diff === null ? "" : suggerito(diff, 4)}</td>
         <td class="num">${q.quote === null ? "" : suggerito(q.quote, 4)}</td>
         ${cell(q.costo)}
@@ -1790,6 +2199,13 @@ function renderMercato() {
         ${cell(netto, netto < 0 ? "negative" : "positive")}
       </tr>`;
     }).join("")}</tbody>`;
+  etichettaColonne(elements.mercatoTable);
+}
+
+// Posizione ancora aperta che ha già avuto un rimborso (vendita parziale), escluse le righe "domani"
+function haVenditeParziali(posizione) {
+  const oggi = todayISO();
+  return state.investimenti.some((r) => r.posizione === posizione && !r.domani && r.operazione === "Rimborso" && r.data <= oggi);
 }
 
 // ABP della posizione: quello dell'operazione più recente che ce l'ha
@@ -2105,9 +2521,61 @@ async function rimuoviDallaWatchlist(isin) {
   await reload();
 }
 
+// Sul telefono le tabelle con classe "tabella-schede" diventano schede (styles.css): ogni
+// cella prende come etichetta il titolo della sua colonna. A destra del nome una freccia che
+// porta alle operazioni, perché lì il tocco sul nome apre e chiude la scheda.
+function etichettaColonne(table) {
+  const titoli = [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim());
+  table.querySelectorAll("tbody tr").forEach((tr) => {
+    [...tr.children].forEach((cella, i) => {
+      if (titoli[i]) cella.dataset.label = titoli[i];
+    });
+    const link = tr.querySelector(":scope > .clickable");
+    if (!link) return;
+    const freccia = document.createElement("span");
+    freccia.className = "solo-schede vedi-operazioni clickable";
+    Object.assign(freccia.dataset, link.dataset);
+    delete freccia.dataset.label;
+    freccia.setAttribute("role", "button");
+    freccia.setAttribute("aria-label", "Vedi le operazioni");
+    freccia.title = "Vedi le operazioni";
+    freccia.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>';
+    link.append(freccia);
+  });
+}
+
+// Telefono: un tocco sulla scheda la apre o la chiude; la freccia accanto al nome porta al
+// registro (come il nome sul computer)
+function apriChiudiScheda(event) {
+  if (!schermoStretto()) return;
+  const riga = event.target.closest("tbody tr");
+  if (!riga || event.target.closest(".vedi-operazioni")) return;
+  event.stopPropagation();
+  riga.classList.toggle("aperta");
+}
+
+// Riga "Conto Fineco" nella tabella Posizioni: costi (bollo, Tobin tax, imposte) e interessi
+// sulla liquidità, che non appartengono a una posizione ma pesano sul risultato
+function rigaContoFineco(costi, interessi) {
+  if (!state.costiFineco.length) return "";
+  const risultato = round2(costi + interessi);
+  return `
+    <tr class="riga-fineco" title="Dal conto Fineco: costi ${formatEuro(costi)}, interessi sulla liquidità ${formatEuro(interessi)}">
+      <th class="clickable" data-tipo="Conto Fineco">Conto Fineco: costi e interessi</th>
+      <td class="num"><span class="zero">—</span></td><td>Conto Fineco</td><td></td>
+      ${cell(0)}${cell(0)}${cell(interessi)}${cell(interessi)}
+      ${cell(risultato, risultato < 0 ? "negative" : "positive")}
+      ${cell(risultato, risultato < 0 ? "negative" : "positive")}
+      <td></td><td></td><td></td>
+    </tr>`;
+}
+
 function renderInvestimenti() {
   const righe = investimentiVisibili();
   const posizioni = riepilogoPosizioni(righe);
+  const sommaFineco = (operazione) => round2(state.costiFineco.filter((r) => r.operazione === operazione).reduce((s, r) => s + r.importo, 0));
+  const costiConto = sommaFineco("Costi e tasse");
+  const interessiConto = sommaFineco("Interessi liquidità");
 
   elements.posizioniTable.innerHTML = !posizioni.length
     ? '<tbody><tr><td class="empty">Nessun investimento.</td></tr></tbody>'
@@ -2123,7 +2591,7 @@ function renderInvestimenti() {
       const stato = statoPosizione(p.posizione);
       return `
       <tr class="${daControllare(p.posizione) ? "da-controllare" : ""} ${stato.stato === "chiusa" ? "chiusa" : ""}" ${titoloQuotazione(p.posizione)}>
-        <th class="clickable" data-posizione="${p.posizione}">${escapeHtml(p.nome)}</th>
+        <th class="clickable" data-posizione="${p.posizione}"><span class="nome-scheda">${escapeHtml(p.nome)}</span><span class="stato stato-${stato.stato} solo-schede">${stato.testo}</span></th>
         <td class="num">${p.posizione}</td>
         <td>${escapeHtml(p.tipo)}</td>
         <td><span class="stato stato-${stato.stato}">${stato.testo}</span></td>
@@ -2134,7 +2602,8 @@ function renderInvestimenti() {
         <td class="num">${p.durata.toLocaleString("it-IT", { maximumFractionDigits: 2 })}</td>
         <td class="num">${percent(p.annuo)}</td>
       </tr>`;
-    }).join("")}</tbody>`;
+    }).join("")}${rigaContoFineco(costiConto, interessiConto)}</tbody>`;
+  etichettaColonne(elements.posizioniTable);
   renderQuotazioniInfo();
   renderMercato();
 
@@ -2145,14 +2614,17 @@ function renderInvestimenti() {
     t.maturato += p.maturato;
     tipi.set(p.tipo, t);
   }
+  // Costi e interessi del conto Fineco: nessun capitale impegnato, solo risultato
+  const tipiConFineco = new Map(tipi);
+  if (state.costiFineco.length) tipiConFineco.set("Conto Fineco", { impegnato: 0, maturato: costiConto + interessiConto });
   const totale = { impegnato: 0, maturato: 0 };
   const tipoRow = (nome, t, tag = "td", link = "") => {
     const risultato = t.maturato - t.impegnato;
     return `<tr><th ${link}>${escapeHtml(nome || "—")}</th>${cell(t.impegnato)}${cell(t.maturato)}
       ${cell(risultato, risultato < 0 ? "negative" : "positive")}
-      <${tag} class="num">${percent(t.impegnato ? (risultato / t.impegnato) * 100 : 0)}</${tag}></tr>`;
+      <${tag} class="num">${percent(t.impegnato ? (risultato / t.impegnato) * 100 : null)}</${tag}></tr>`;
   };
-  const tipiRows = [...tipi.entries()].sort(([a], [b]) => a.localeCompare(b, "it")).map(([nome, t]) => {
+  const tipiRows = [...tipiConFineco.entries()].sort(([a], [b]) => a.localeCompare(b, "it")).map(([nome, t]) => {
     totale.impegnato += t.impegnato;
     totale.maturato += t.maturato;
     return tipoRow(nome, t, "td", `class="clickable" data-tipo="${escapeHtml(nome || "")}"`);
@@ -2170,19 +2642,33 @@ function renderInvestimenti() {
     const va = a[colonna] ?? "";
     const vb = b[colonna] ?? "";
     const diff = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb), "it");
-    return diff || a.data.localeCompare(b.data) || a.id - b.id;
+    return diff || a.data.localeCompare(b.data) || String(a.id).localeCompare(String(b.id), "it", { numeric: true });
   };
   renderFiltriInv();
-  const operazioni = filtraInvestimenti(state.investimenti).sort((a, b) => (crescente ? confronta(a, b) : confronta(b, a)));
+  // Con le operazioni anche costi e interessi del conto Fineco (sola lettura)
+  const tutte = [...state.investimenti, ...state.costiFineco];
+  const operazioni = filtraInvestimenti(tutte).sort((a, b) => (crescente ? confronta(a, b) : confronta(b, a)));
   const saldoFiltrato = operazioni.reduce((s, r) => s + r.importo, 0);
-  elements.invTotali.textContent = operazioni.length === state.investimenti.length ? ""
+  elements.invTotali.textContent = operazioni.length === tutte.length ? ""
     : `${operazioni.length} operazioni · saldo ${formatEuro(saldoFiltrato)}`;
   // L'ultima operazione già avvenuta (la più recente fino a oggi) è evidenziata in verde
   const ultima = state.investimenti
     .filter((riga) => riga.data <= oggi)
     .reduce((u, riga) => (!u || riga.data > u.data || (riga.data === u.data && riga.id > u.id) ? riga : u), null);
   renderSortIndicators(elements.sortButtonsInv, "sortInv", state.ordinamentoInv);
-  elements.operazioniBody.innerHTML = (state.editingInvestimentoId === "nuova" ? rigaInvestimentoInModifica(null) : "") + operazioni.map((riga) => (riga.id === state.editingInvestimentoId ? rigaInvestimentoInModifica(riga) : `
+  const rigaFineco = (riga) => `
+    <tr class="riga-fineco" title="Dal conto Fineco: si aggiorna con + Excel Fineco">
+      <td>${formatDate(riga.data)}</td>
+      <td class="num"><span class="zero">—</span></td>
+      <td>${escapeHtml(riga.nome)}</td>
+      <td>${escapeHtml(riga.tipo)}</td>
+      <td>${escapeHtml(riga.operazione)}</td>
+      <td></td><td></td>
+      <td class="num ${riga.importo < 0 ? "negative" : "positive"}">${formatNumber(riga.importo)}</td>
+      <td>${escapeHtml(riga.note || "")}</td>
+      <td></td>
+    </tr>`;
+  elements.operazioniBody.innerHTML = (state.editingInvestimentoId === "nuova" ? rigaInvestimentoInModifica(null) : "") + operazioni.map((riga) => (riga.fineco ? rigaFineco(riga) : riga.id === state.editingInvestimentoId ? rigaInvestimentoInModifica(riga) : `
     <tr class="${riga.data > oggi ? "future" : ""} ${riga === ultima ? "ultima" : ""} ${riga.domani && daControllare(riga.posizione) ? "da-controllare" : ""}" ${riga.domani && daControllare(riga.posizione) ? titoloQuotazione(riga.posizione) : riga === ultima ? 'title="Ultima operazione avvenuta"' : riga.domani ? 'title="Valore attuale: la data è sempre domani (come =OGGI()+1 nell\'Excel)"' : riga.data > oggi ? 'title="Operazione prevista"' : ""}>
       <td>${formatDate(riga.data)}</td>
       <td class="num">${riga.posizione}</td>
@@ -2214,16 +2700,18 @@ function renderInvestimenti() {
 // Grafici come nel foglio: torta per tipo e andamento cumulato delle operazioni
 function renderInvestimentiCharts(righe, tipi) {
   const oggi = todayISO();
-  // Totali cumulati: capitale investito (positivo), rimborsi, cedole e dividendi
-  const cumulati = { investito: 0, rimborsi: 0, cedole: 0 };
+  // Totali cumulati: capitale investito (positivo), rimborsi, cedole e dividendi (con gli
+  // interessi sulla liquidità Fineco) e costi del conto Fineco (positivi: bollo, Tobin tax, imposte)
+  const cumulati = { investito: 0, rimborsi: 0, cedole: 0, costi: 0 };
   const punti = [];
   const sintesi = { investito: 0, restituito: 0, interessi: 0 };
-  for (const riga of [...righe].sort((a, b) => a.data.localeCompare(b.data))) {
+  for (const riga of [...righe, ...state.costiFineco].sort((a, b) => a.data.localeCompare(b.data))) {
     if (riga.operazione === "Investimento") cumulati.investito -= riga.importo;
     else if (riga.operazione === "Rimborso") cumulati.rimborsi += riga.importo;
+    else if (riga.operazione === "Costi e tasse") cumulati.costi -= riga.importo;
     else cumulati.cedole += riga.importo;
     punti.push({ data: riga.data, ...cumulati });
-    if (riga.data <= oggi) {
+    if (riga.data <= oggi && !riga.fineco) {
       if (riga.operazione === "Investimento") sintesi.investito += -riga.importo;
       else if (riga.operazione === "Rimborso") sintesi.restituito += riga.importo;
       else sintesi.interessi += riga.importo;
@@ -2234,6 +2722,16 @@ function renderInvestimentiCharts(righe, tipi) {
     capitale investito <strong>${formatEuro(sintesi.investito)}</strong> ·
     capitale restituito <strong>${formatEuro(sintesi.restituito)}</strong> ·
     interessi e dividendi <strong class="positive">${formatEuro(sintesi.interessi)}</strong>`;
+
+  // Conto Fineco: liquidità (somma di tutti i movimenti del conto), costi e interessi
+  const fineco = state.fineco;
+  elements.finecoSintesi.classList.toggle("hidden", !fineco);
+  if (fineco) {
+    elements.finecoSintesi.innerHTML = `Conto Fineco (ultimo movimento ${formatDate(fineco.ultimaData)}):
+      liquidità <strong>${formatEuro(fineco.liquidita)}</strong> ·
+      costi (bollo, Tobin tax, imposte) <strong class="negative">${formatEuro(fineco.tipi.get("Costi") || 0)}</strong> ·
+      interessi sulla liquidità <strong class="positive">${formatEuro(fineco.tipi.get("Interessi") || 0)}</strong>`;
+  }
 
   const tipiOrdinati = [...tipi.entries()].sort(([a], [b]) => a.localeCompare(b, "it"));
   drawChart("tipi", elements.chartTipi, {
@@ -2279,9 +2777,10 @@ function renderInvestimentiCharts(righe, tipi) {
       datasets: [
         linea("Capitale investito", "#4472c4", (p) => p.investito),
         linea("Rimborsi", "#ed7d31", (p) => p.rimborsi),
-        linea("Cedole e dividendi", "#2e8b57", (p) => p.cedole),
-        // Negativo: soldi ancora investiti; sopra zero: guadagno
-        linea("Saldo netto (rientrato − investito)", "#8a8a8a", (p) => p.rimborsi + p.cedole - p.investito)
+        linea(state.costiFineco.length ? "Cedole, dividendi e interessi" : "Cedole e dividendi", "#2e8b57", (p) => p.cedole),
+        ...(state.costiFineco.length ? [linea("Costi e tasse", "#c0392b", (p) => p.costi)] : []),
+        // Negativo: soldi ancora investiti; sopra zero: guadagno (costi compresi)
+        linea("Saldo netto (rientrato − investito − costi)", "#8a8a8a", (p) => p.rimborsi + p.cedole - p.investito - p.costi)
       ]
     },
     options: {
@@ -2289,7 +2788,7 @@ function renderInvestimentiCharts(righe, tipi) {
       interaction: { mode: "index", intersect: false },
       elements: { point: { radius: 0 }, line: { stepped: true } },
       plugins: {
-        legend: legendaSotto(),
+        legend: senzaLegenda(),
         lineaOggi: { posizione: punti.length ? giorno(oggi) : null },
         tooltip: valoriSottoIlGrafico
       },
@@ -2372,7 +2871,7 @@ function filtraInvestimenti(righe) {
   const testo = normalize(f.testo);
   return righe.filter((r) =>
     (f.posizione === "" || r.posizione === Number(f.posizione)) &&
-    (!f.stato || (f.stato === "chiusa") === (statoPosizione(r.posizione).stato === "chiusa")) &&
+    (!f.stato || (!r.fineco && (f.stato === "chiusa") === (statoPosizione(r.posizione).stato === "chiusa"))) &&
     (!f.operazione || r.operazione === f.operazione) &&
     (!f.tipo || (r.tipo || "") === f.tipo) &&
     (!f.anno || r.data.startsWith(f.anno)) &&
@@ -2388,12 +2887,13 @@ function renderFiltriInv() {
   elements.invFiltri.posizione.innerHTML = opzioni("Tutte le posizioni",
     [...posizioni].sort(([a], [b]) => a - b).map(([id, nome]) => [id, `${id} · ${nome}`]), f.posizione);
   elements.invFiltri.stato.innerHTML = opzioni("Aperte e chiuse", [["aperta", "Solo aperte"], ["chiusa", "Solo chiuse"]], f.stato);
+  const tutte = [...state.investimenti, ...state.costiFineco];
   elements.invFiltri.operazione.innerHTML = opzioni("Tutte le operazioni",
-    ["Investimento", "Rimborso", "Cedola", "Dividendi"].map((o) => [o, o]), f.operazione);
+    ["Investimento", "Rimborso", "Cedola", "Dividendi", ...(state.costiFineco.length ? ["Costi e tasse", "Interessi liquidità"] : [])].map((o) => [o, o]), f.operazione);
   elements.invFiltri.tipo.innerHTML = opzioni("Tutti i tipi",
-    [...new Set(state.investimenti.map((r) => r.tipo).filter(Boolean))].sort().map((t) => [t, t]), f.tipo);
+    [...new Set(tutte.map((r) => r.tipo).filter(Boolean))].sort().map((t) => [t, t]), f.tipo);
   elements.invFiltri.anno.innerHTML = opzioni("Tutti gli anni",
-    [...new Set(state.investimenti.map((r) => r.data.slice(0, 4)))].sort().reverse().map((a) => [a, a]), f.anno);
+    [...new Set(tutte.map((r) => r.data.slice(0, 4)))].sort().reverse().map((a) => [a, a]), f.anno);
   if (elements.invFiltri.testo.value !== f.testo) elements.invFiltri.testo.value = f.testo;
 }
 
@@ -2432,6 +2932,23 @@ function compilaDaNome(riga) {
     campo("tipo").value = ultimo.tipo || "";
   } else if (!campo("posizione").value) {
     campo("posizione").value = Math.max(-1, ...state.investimenti.map((r) => r.posizione)) + 1;
+  }
+}
+
+// Nuova operazione: scrivendo l'ID di una posizione esistente compila nome, ISIN, prodotto
+// e tipo dalla sua ultima operazione. Se poi l'ID diventa uno che non esiste (es. da "1" a
+// "17" mentre si scrive), i campi compilati così si svuotano; quelli scritti a mano restano.
+function compilaDaPosizione(riga) {
+  const campi = ["nome", "isin", "prodotto", "tipo"].map((nome) => riga.querySelector(`[data-campo="${nome}"]`));
+  const testo = riga.querySelector('[data-campo="posizione"]').value;
+  const precedenti = testo === "" ? [] : state.investimenti.filter((r) => r.posizione === Number(testo));
+  const ultimo = precedenti[precedenti.length - 1];
+  if (ultimo) {
+    [ultimo.nome, ultimo.isin, ultimo.prodotto, ultimo.tipo].forEach((valore, i) => { campi[i].value = valore || ""; });
+    riga.dataset.autocompilata = "si";
+  } else if (riga.dataset.autocompilata) {
+    campi.forEach((c) => { c.value = ""; });
+    delete riga.dataset.autocompilata;
   }
 }
 
@@ -2593,6 +3110,37 @@ function bindEvents() {
     if (event.key === "Escape") annullaModifica();
   });
 
+  // Schede a tendina delle sintesi (solo telefono): in fase di cattura, prima dei link
+  [elements.posizioniTable, elements.mercatoTable].forEach((table) => table.addEventListener("click", apriChiudiScheda, true));
+
+  // Estratto conto Fineco (Posizioni)
+  elements.finecoButton.addEventListener("click", () => elements.finecoInput.click());
+  elements.finecoInput.addEventListener("change", () => handleFinecoFile(elements.finecoInput.files[0]));
+  elements.finecoPanel.addEventListener("click", (event) => {
+    if (event.target.id === "fineco-confirm") confermaFineco();
+    if (event.target.id === "fineco-cancel") {
+      state.importFineco = null;
+      renderFinecoPanel();
+    }
+  });
+  elements.finecoPanel.addEventListener("change", (event) => {
+    const imp = state.importFineco;
+    const t = event.target;
+    if (t.matches(".fineco-scelta")) {
+      imp.scelte.set(t.dataset.nome, t.value === "nuova" ? "nuova" : t.value === "" ? undefined : Number(t.value));
+      renderFinecoPanel(); // cambiano posizioni, rimborsi calcolati e righe "non trovate"
+    }
+    if (t.matches(".fineco-op")) {
+      if (t.checked) imp.escluse.delete(Number(t.dataset.indice));
+      else imp.escluse.add(Number(t.dataset.indice));
+    }
+    if (t.matches(".fineco-elimina")) {
+      if (t.checked) imp.tenute.delete(Number(t.dataset.id));
+      else imp.tenute.add(Number(t.dataset.id));
+      renderFinecoPanel(); // il prezzo di carico delle vendite dipende dagli acquisti tenuti
+    }
+  });
+
   elements.excelButton.addEventListener("click", () => elements.excelInput.click());
   elements.excelInput.addEventListener("change", () => handleExcelFile(elements.excelInput.files[0]));
   elements.importPanel.addEventListener("click", (event) => {
@@ -2644,7 +3192,6 @@ function bindEvents() {
   });
   document.querySelectorAll(".chiudi-primo-piano").forEach((button) => button.addEventListener("click", () => history.back()));
   window.addEventListener("popstate", chiudiPrimoPiano);
-  document.addEventListener("click", chiudiValoriFuori);
 
   elements.toggleButtons.forEach((button) => button.addEventListener("click", () => {
     state.tipoDashboard = button.dataset.tipo;
@@ -2709,6 +3256,9 @@ function bindEvents() {
   // per un singolo acquisto di una posizione con più acquisti va corretto col prezzo pagato)
   elements.operazioniBody.addEventListener("input", (event) => {
     const riga = event.target.closest("tr.editing");
+    if (riga?.dataset.id === "nuova" && event.target.dataset.campo === "posizione") compilaDaPosizione(riga);
+    // nome, ISIN, prodotto o tipo cambiati a mano: non sono più "compilati in automatico"
+    if (riga && ["nome", "isin", "prodotto", "tipo"].includes(event.target.dataset.campo)) delete riga.dataset.autocompilata;
     if (!riga || !["quantita", "abp"].includes(event.target.dataset.campo)) return;
     if (riga.querySelector('[data-campo="operazione"]').value !== "Investimento") return;
     const quantita = parseAmount(riga.querySelector('[data-campo="quantita"]').value);

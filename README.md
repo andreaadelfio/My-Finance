@@ -10,10 +10,11 @@ Sostituisce il file Excel `Portafogli.xlsx` per movimenti, budget e riepilogo an
 - `assets/styles.css`: stile.
 - `assets/config.js`: URL e chiave publishable di Supabase.
 - `supabase/schema.sql`: tabelle `categorie`, `movimenti`, `budget`, `saldi`, `riepiloghi_annuali`,
-  `investimenti`, `mappatura_categorie`, `quotazioni`, `watchlist`. Si può rieseguire quando
-  cambia: non tocca i dati.
+  `investimenti`, `mappatura_categorie`, `quotazioni`, `watchlist`, `movimenti_fineco`,
+  `mappatura_titoli`. Si può rieseguire quando cambia: non tocca i dati.
 - `import_excel.py`: carica su Supabase i dati dei file Excel.
-- `backup.py`: copia di tutte le tabelle in un file JSON (`make backup`).
+- `backup.py`: copia di tutte le tabelle in un file JSON (`make backup`); `ripristina.py`
+  rimette una tabella com'era in un backup.
 
 ## Cosa fa
 
@@ -156,6 +157,28 @@ Per attivarla: eseguire `supabase/schema.sql` nell'SQL Editor e ripubblicare la 
 I titoli di ISIN Monitor vengono inseriti solo se la watchlist è vuota: rieseguendo lo
 schema non tornano quelli tolti dal sito.
 
+## Conto Fineco
+
+Fineco si usa per gli investimenti; i bonifici da e verso Intesa sono già nei Movimenti
+(categorie "Investimenti, BDR e Salvadanaio" e "Disinvestimenti, BDR e Salvadanaio").
+Si scarica l'estratto dal sito Fineco (Excel `movements_AAAAMMGG.xlsx`, il periodo più lungo
+possibile) e si carica con **+ Excel Fineco** in Investimenti → Posizioni. L'anteprima mostra:
+
+- i movimenti nuovi del conto, per tipo, e la liquidità dopo l'import confrontata con il
+  "Saldo Finale" del file (devono coincidere). Tutti i movimenti vanno nella tabella
+  `movimenti_fineco`, senza doppioni: costi (bollo, Tobin tax, imposta sul capital gain) e
+  interessi sulla liquidità restano lì e la Dashboard investimenti ne mostra i totali con la
+  liquidità;
+- le operazioni da aggiungere al registro: acquisti, vendite (spezzate come sempre in
+  Rimborso al prezzo di carico + Cedola per il guadagno), cedole e dividendi al netto della
+  ritenuta. Quelle già nel registro (stesso importo, data entro 10 giorni; per cedole e
+  dividendi anche il lordo) vengono saltate. Ogni nome Fineco ("ISHS CR WD USD-AC") va
+  collegato una volta alla sua posizione: la scelta resta in `mappatura_titoli`;
+- gli acquisti del registro che Fineco non ha nello stesso periodo, di solito righe che
+  riassumono più acquisti: spuntati vengono eliminati, al loro posto restano quelli veri.
+
+Ricaricare lo stesso file non cambia nulla.
+
 ## Backup
 
 ```bash
@@ -166,6 +189,16 @@ Salva tutte le tabelle in `backup/myfinance-backup-AAAA-MM-GG.json` (un file al 
 la cartella è nel `.gitignore`, perché contiene dati personali). Con
 `python3 backup.py <cartella>` lo salva altrove. Conviene farlo ogni tanto e prima di
 modifiche importanti al database.
+
+Per tornare indietro su una tabella (chiede conferma prima di scrivere):
+
+```bash
+python3 ripristina.py backup/myfinance-backup-AAAA-MM-GG.json investimenti
+```
+
+Vale per `investimenti`, `movimenti_fineco`, `mappatura_titoli`, `quotazioni`, `watchlist`,
+`saldi` e `riepiloghi_annuali`; categorie, movimenti e budget, legati fra loro, vanno
+ripristinati a mano.
 
 ## Avvio locale
 

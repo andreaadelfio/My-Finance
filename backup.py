@@ -25,6 +25,8 @@ TABELLE = {
     "mappatura_categorie": "id",
     "quotazioni": "posizione",
     "watchlist": "isin",
+    "movimenti_fineco": "id",
+    "mappatura_titoli": "id",
 }
 
 
@@ -35,7 +37,11 @@ def main():
 
     tabelle = {}
     for tabella, ordine in TABELLE.items():
-        tabelle[tabella] = db.select_all(tabella, order=ordine)
+        try:
+            tabelle[tabella] = db.select_all(tabella, order=ordine)
+        except SystemExit as errore:  # tabella non ancora creata (schema.sql non rieseguito)
+            print(f"{tabella}: saltata ({errore})")
+            continue
         print(f"{tabella}: {len(tabelle[tabella])} righe")
 
     oggi = dt.date.today().isoformat()
