@@ -1522,17 +1522,34 @@ tr.editing .check-field {
   margin-top: 0.3rem;
 }
 
-/* Zoom dei grafici a linee: pulsante per tornare al grafico intero, in alto a destra */
-.zoom-reset {
+/* Zoom dei grafici a linee: comandi in alto a destra del grafico. ＋ e − solo con il
+   grafico in primo piano (telefono); "Reimposta zoom" solo quando è ingrandito */
+.zoom-comandi {
   position: absolute;
   top: 0;
   right: 0;
   z-index: 1;
-  padding: 0.15rem 0.5rem;
+  display: flex;
+  gap: 0.3rem;
+}
+
+.zoom-comandi button {
+  padding: 0.15rem 0.55rem;
   border: 1px solid var(--accent);
   border-radius: 999px;
   background: var(--surface);
   color: var(--accent);
   font-size: 0.75rem;
   cursor: pointer;
+}
+
+.zoom-comandi .solo-primo-piano {
+  display: none;
+}
+
+.primo-piano .zoom-comandi .solo-primo-piano {
+  display: inline-block;
+  min-width: 2.2rem;
+  font-size: 1.1rem;
+  line-height: 1.2;
 }

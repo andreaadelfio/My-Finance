@@ -15,7 +15,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon-192.png">
-    <link rel="stylesheet" href="./assets/styles.css?v=45">
+    <link rel="stylesheet" href="./assets/styles.css?v=49">
   </head>
   <body>
     <div class="page-shell">
@@ -125,7 +125,11 @@
             <button class="icon-button chiudi-primo-piano" type="button" aria-label="Chiudi">✕</button>
             <h2 id="titolo-grafico-linee"></h2>
             <div class="chart-canvas">
-              <button class="zoom-reset hidden" type="button" title="Torna al grafico intero (anche doppio clic)">Reimposta zoom</button>
+              <div class="zoom-comandi">
+                <button class="zoom-meno solo-primo-piano" type="button" aria-label="Rimpicciolisci" title="Rimpicciolisci">−</button>
+                <button class="zoom-piu solo-primo-piano" type="button" aria-label="Ingrandisci attorno al mese scelto" title="Ingrandisci attorno al mese scelto">＋</button>
+                <button class="zoom-reset hidden" type="button" title="Torna al grafico intero (anche doppio clic)">Reimposta zoom</button>
+              </div>
               <canvas id="chart-andamento"></canvas></div>
           </div>
           <!-- Torta chiusa di default: si apre cliccando il titolo -->
@@ -166,7 +170,11 @@
             <button class="icon-button chiudi-primo-piano" type="button" aria-label="Chiudi">✕</button>
             <h2>Andamento nel tempo</h2>
             <div class="chart-canvas">
-              <button class="zoom-reset hidden" type="button" title="Torna al grafico intero (anche doppio clic)">Reimposta zoom</button>
+              <div class="zoom-comandi">
+                <button class="zoom-meno solo-primo-piano" type="button" aria-label="Rimpicciolisci" title="Rimpicciolisci">−</button>
+                <button class="zoom-piu solo-primo-piano" type="button" aria-label="Ingrandisci attorno al mese scelto" title="Ingrandisci attorno al mese scelto">＋</button>
+                <button class="zoom-reset hidden" type="button" title="Torna al grafico intero (anche doppio clic)">Reimposta zoom</button>
+              </div>
               <canvas id="chart-investimenti"></canvas></div>
           </div>
           <details class="chart-box chart-torta">
@@ -293,6 +301,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=56"></script>
+    <script type="module" src="./assets/app.js?v=64"></script>
   </body>
 </html>

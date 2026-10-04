@@ -1591,28 +1591,54 @@ function ridisegnaGrafico(box) {
 }
 
 // Zoom nei grafici a linee (chartjs-plugin-zoom), solo in orizzontale: sul computer si
-// trascina col mouse su un tratto; sul telefono a due dita, solo con il grafico in primo
-// piano (altrimenti il dito sul grafico non farebbe più scorrere la pagina).
-// "Reimposta zoom" o doppio clic per tornare al grafico intero. ampiezzaMinima nelle unità
-// dell'asse x (mesi per la Dashboard, millisecondi per gli investimenti).
+// trascina col mouse su un tratto; sul telefono, con il grafico in primo piano, i pulsanti
+// ＋ / − ingrandiscono attorno al mese toccato e un dito sposta il periodo (fuori dal primo
+// piano niente zoom, così il dito sul grafico fa scorrere la pagina). "Reimposta zoom" o
+// doppio clic per tornare al grafico intero. ampiezzaMinima nelle unità dell'asse x (mesi
+// per la Dashboard, millisecondi per gli investimenti).
 function opzioniZoom(canvas, ampiezzaMinima) {
   const telefono = schermoStretto();
-  const attivo = !telefono || canvas.closest(".chart-box").classList.contains("primo-piano");
-  const mostraReset = ({ chart }) => {
-    chart.canvas.parentElement.querySelector(".zoom-reset").classList.toggle("hidden", !chart.isZoomedOrPanned());
-  };
+  const primoPiano = canvas.closest(".chart-box").classList.contains("primo-piano");
+  canvas.$ampiezzaMinima = ampiezzaMinima;
   canvas.parentElement.querySelector(".zoom-reset").classList.add("hidden"); // grafico nuovo: non ingrandito
   return {
     zoom: {
-      drag: { enabled: attivo && !telefono, backgroundColor: "rgba(63, 109, 86, 0.15)" },
-      pinch: { enabled: attivo && telefono },
+      drag: { enabled: !telefono, backgroundColor: "rgba(63, 109, 86, 0.15)" },
       mode: "x",
-      onZoomComplete: mostraReset
+      onZoomComplete: ({ chart }) => mostraResetZoom(chart.canvas)
     },
-    pan: { enabled: attivo && telefono, mode: "x", onPanComplete: mostraReset },
+    pan: { enabled: telefono && primoPiano, mode: "x", onPanComplete: ({ chart }) => mostraResetZoom(chart.canvas) },
     limits: { x: { min: "original", max: "original", minRange: ampiezzaMinima } }
   };
 }
+
+function mostraResetZoom(canvas) {
+  const chart = window.Chart?.getChart(canvas);
+  canvas.parentElement.querySelector(".zoom-reset").classList.toggle("hidden", !chart?.isZoomedOrPanned());
+}
+
+// ＋ / −: nuova ampiezza del periodo (× fattore) centrata sul punto mostrato nella riga dei
+// valori (il mese toccato), senza uscire dal grafico intero
+function zoomPulsante(canvas, fattore) {
+  const chart = window.Chart?.getChart(canvas);
+  if (!chart) return;
+  const scala = chart.scales.x;
+  const intero = chart.getInitialScaleBounds().x;
+  const categorie = scala.type === "category";
+  const indice = chart.$indiceValori;
+  const centro = indice === null || indice === undefined ? (scala.min + scala.max) / 2
+    : categorie ? indice : valoreXPunto(chart, indice);
+  const ampiezza = Math.min(intero.max - intero.min, Math.max(canvas.$ampiezzaMinima, (scala.max - scala.min) * fattore));
+  let min = centro - ampiezza / 2;
+  let max = centro + ampiezza / 2;
+  if (min < intero.min) [min, max] = [intero.min, intero.min + ampiezza];
+  if (max > intero.max) [min, max] = [intero.max - ampiezza, intero.max];
+  if (categorie) [min, max] = [Math.round(min), Math.round(max)];
+  chart.zoomScale("x", { min, max }, "default");
+  mostraResetZoom(canvas);
+}
+
+const valoreXPunto = (chart, indice) => chart.data.datasets[0].data[indice]?.x ?? indice;
 
 function reimpostaZoom(canvas) {
   window.Chart?.getChart(canvas)?.resetZoom();
@@ -2943,17 +2969,19 @@ function renderInvestimentiCharts(righe, tipi) {
   const primoAnno = punti.length ? Number(punti[0].data.slice(0, 4)) : 0;
   const ultimoAnno = punti.length ? Number(punti[punti.length - 1].data.slice(0, 4)) : 0;
 
+  const serie = [
+    { nome: "Capitale investito", colore: "#4472c4", valore: (p) => p.investito },
+    { nome: "Rimborsi", colore: "#ed7d31", valore: (p) => p.rimborsi },
+    { nome: state.costiFineco.length ? "Cedole, dividendi e interessi" : "Cedole e dividendi", colore: "#2e8b57", valore: (p) => p.cedole },
+    ...(state.costiFineco.length ? [{ nome: "Costi e tasse", colore: "#c0392b", valore: (p) => p.costi }] : []),
+    // Negativo: soldi ancora investiti; sopra zero: guadagno (costi compresi)
+    { nome: "Saldo netto (rientrato − investito − costi)", colore: "#8a8a8a", valore: (p) => p.rimborsi + p.cedole - p.investito - p.costi }
+  ];
+
   drawChart("investimenti", elements.chartInvestimenti, {
     type: "line",
     data: {
-      datasets: [
-        linea("Capitale investito", "#4472c4", (p) => p.investito),
-        linea("Rimborsi", "#ed7d31", (p) => p.rimborsi),
-        linea(state.costiFineco.length ? "Cedole, dividendi e interessi" : "Cedole e dividendi", "#2e8b57", (p) => p.cedole),
-        ...(state.costiFineco.length ? [linea("Costi e tasse", "#c0392b", (p) => p.costi)] : []),
-        // Negativo: soldi ancora investiti; sopra zero: guadagno (costi compresi)
-        linea("Saldo netto (rientrato − investito − costi)", "#8a8a8a", (p) => p.rimborsi + p.cedole - p.investito - p.costi)
-      ]
+      datasets: serie.map((s) => linea(s.nome, s.colore, s.valore))
     },
     options: {
       maintainAspectRatio: false,
@@ -2983,9 +3011,13 @@ function renderInvestimentiCharts(righe, tipi) {
               return;
             }
             scala.ticks = [];
-            // sul telefono un anno sì e uno no, altrimenti le etichette si toccano
-            const passo = schermoStretto() ? 2 : 1;
-            for (let anno = primoAnno; anno <= ultimoAnno + 1; anno += passo) scala.ticks.push({ value: giorno(`${anno}-01-01`) });
+            // sul telefono, oltre i 5 anni visibili, un anno sì e uno no (le etichette si toccano)
+            const passo = schermoStretto() && scala.max - scala.min > 5 * 365 * 86400000 ? 2 : 1;
+            // solo gli anni visibili (con lo zoom il periodo mostrato è più corto)
+            for (let anno = primoAnno; anno <= ultimoAnno + 1; anno += passo) {
+              const valore = giorno(`${anno}-01-01`);
+              if (valore >= scala.min && valore <= scala.max) scala.ticks.push({ value: valore });
+            }
           },
           ticks: {
             callback(valore) {
@@ -3420,10 +3452,11 @@ function bindEvents() {
 
   // Zoom dei grafici a linee: "Reimposta zoom" o doppio clic per tornare al grafico intero
   [elements.chartAndamento, elements.chartInvestimenti].forEach((canvas) => {
-    canvas.parentElement.querySelector(".zoom-reset").addEventListener("click", (event) => {
-      event.stopPropagation();
-      reimpostaZoom(canvas);
-    });
+    const comandi = canvas.parentElement.querySelector(".zoom-comandi");
+    comandi.addEventListener("click", (event) => event.stopPropagation()); // non apre il primo piano
+    comandi.querySelector(".zoom-reset").addEventListener("click", () => reimpostaZoom(canvas));
+    comandi.querySelector(".zoom-piu").addEventListener("click", () => zoomPulsante(canvas, 0.5));
+    comandi.querySelector(".zoom-meno").addEventListener("click", () => zoomPulsante(canvas, 2));
     canvas.addEventListener("dblclick", () => reimpostaZoom(canvas));
   });
 

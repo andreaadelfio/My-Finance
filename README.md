@@ -59,8 +59,9 @@ Sostituisce il file Excel `Portafogli.xlsx` per movimenti, budget e riepilogo an
 
 Nei grafici dell'andamento (Dashboard e Dashboard investimenti) una linea tratteggiata
 verticale segna la data di oggi. Si possono ingrandire (zoom orizzontale, con
-`chartjs-plugin-zoom`): sul computer trascinando col mouse su un tratto, sul telefono a due
-dita con il grafico a schermo intero; "Reimposta zoom" o doppio clic per tornare indietro.
+`chartjs-plugin-zoom`): sul computer trascinando col mouse su un tratto; sul telefono, con il
+grafico a schermo intero, si tocca un mese e ＋ / − ingrandiscono attorno a quel mese, un dito
+sposta il periodo. "Reimposta zoom" o doppio clic per tornare indietro.
 
 Con "Tutti gli anni" la tabella **Andamento annuale** parte dal 2021, come il foglio "Pre 2023":
 oltre a entrate, uscite, risparmio e saldo a fine anno mostra mesi lavorati ed entrate e uscite
