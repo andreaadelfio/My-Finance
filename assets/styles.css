@@ -1569,3 +1569,9 @@ tr.editing .check-field {
 .movimenti-table tr.in-attesa td {
   font-style: italic;
 }
+
+.operazione .tag-attesa {
+  margin-left: 0.3rem;
+  font-weight: 400;
+  vertical-align: 1px;
+}

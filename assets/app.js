@@ -491,9 +491,9 @@ function renderMovimenti() {
   } else {
     elements.movimentiBody.innerHTML = lista.righe.map((movimento) => (movimento.id === state.editingId ? rigaInModifica(movimento) : `
     <tr class="${movimento.contabilizzato === false ? "in-attesa" : ""}">
-      <td data-label="Data">${formatDate(movimento.data)}${movimento.contabilizzato === false ? ' <span class="tag-attesa" title="Non ancora contabilizzato dalla banca: al prossimo import viene sostituito da quello vero">in attesa</span>' : ""}</td>
+      <td data-label="Data">${formatDate(movimento.data)}</td>
       <td data-label="Operazione">
-        <span class="operazione">${escapeHtml(movimento.operazione)}</span>
+        <span class="operazione">${escapeHtml(movimento.operazione)}${movimento.contabilizzato === false ? ' <span class="tag-attesa" title="Non ancora contabilizzato dalla banca: al prossimo import viene sostituito da quello vero">in attesa</span>' : ""}</span>
         ${movimento.dettagli ? `<span class="dettagli" title="${escapeHtml(movimento.dettagli)}">${escapeHtml(movimento.dettagli)}</span>` : ""}
       </td>
       <td data-label="Categoria">
