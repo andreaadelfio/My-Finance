@@ -101,8 +101,10 @@ il sito non scarica tutti i movimenti.
   oggi che mostra l'app Intesa, e il sito lo confronta con quello calcolato dopo l'import
   (saldo a inizio anno + movimenti contabilizzati dell'anno). Una differenza vuol dire movimenti
   mancanti o doppi.
-  I movimenti **non ancora contabilizzati** (colonna "Contabilizzazione" dell'estratto Intesa)
-  entrano con `contabilizzato = false` e nella lista hanno l'etichetta "in attesa". Al prossimo
+  I movimenti **non ancora contabilizzati** (colonna "Contabilizzazione" dell'estratto Intesa:
+  "NO", o "NON CONTABILIZZATO" negli export più vecchi) entrano con `contabilizzato = false` e
+  nella lista hanno l'etichetta "in attesa". Se un movimento è già nel database come
+  contabilizzato ma il file lo dà ancora "NO", viene segnato in attesa. Al prossimo
   import, quelli in attesa del periodo coperto dal file vengono sostituiti da quello che dice il
   file: contabilizzati (anche se la banca ne ha cambiato data o descrizione), ancora in attesa,
   o spariti se annullati. Lo stesso fa `import_excel.py`.

@@ -709,11 +709,12 @@ function leggiTabella(righe, rigaIntestazione, tipoFoglio = null) {
     const grezzo = valore(riga, "importo");
     const importo = typeof grezzo === "number" ? grezzo : parseAmount(grezzo);
     if (!data || importo === null || importo === 0) return null;
-    // Estratto Intesa: "CONTABILIZZATO" oppure in attesa; senza la colonna vale contabilizzato
+    // Estratto Intesa: colonna "Contabilizzazione" con "SI"/"NO" (o "CONTABILIZZATO"/"NON
+    // CONTABILIZZATO" negli export più vecchi); senza la colonna vale contabilizzato
     const stato = testo(valore(riga, "contabilizzazione")).toUpperCase();
     return {
       data,
-      contabilizzato: !stato || stato === "CONTABILIZZATO",
+      contabilizzato: ["", "SI", "SÌ", "CONTABILIZZATO"].includes(stato),
       operazione: testo(valore(riga, "operazione")),
       dettagli: testo(valore(riga, "dettagli")),
       categoriaBanca: testo(valore(riga, "categoria")),
@@ -785,15 +786,20 @@ async function handleExcelFile(file) {
     // si fa solo con i contabilizzati
     const inAttesa = esistenti.filter((r) => !r.contabilizzato);
     // I doppioni veri si contano: 2 righe uguali nel file e 1 nel database -> se ne aggiunge 1
-    const presenti = new Map();
+    const presenti = new Map(); // chiave -> id dei movimenti contabilizzati del database
     for (const r of esistenti.filter((e) => e.contabilizzato)) {
       const key = chiaveMovimento(r.data, r.importo, r.operazione, r.dettagli);
-      presenti.set(key, (presenti.get(key) || 0) + 1);
+      presenti.set(key, [...(presenti.get(key) || []), r.id]);
     }
+    // Già presenti come contabilizzati ma per il file ancora in attesa (es. importati con una
+    // versione che non leggeva lo stato): vengono segnati in attesa
+    const daSegnare = [];
     const nuovi = movimenti.filter((m) => {
       const key = chiaveMovimento(m.data, m.importo, m.operazione, m.dettagli);
-      if (!presenti.get(key)) return true;
-      presenti.set(key, presenti.get(key) - 1);
+      const ids = presenti.get(key);
+      if (!ids?.length) return true;
+      const id = ids.shift();
+      if (!m.contabilizzato) daSegnare.push(id);
       return false;
     });
     const daDecidere = new Map();
@@ -805,7 +811,7 @@ async function handleExcelFile(file) {
     }
     state.importazione = {
       nomeFile: file.name, totale: movimenti.length, dal: date[0], al: date[date.length - 1], nuovi, daDecidere,
-      inAttesa, saldoContabile: state.saldi.has(anno) ? round2(state.saldi.get(anno) + Number(contabilizzatiAnno.data[0]?.sum || 0)) : null
+      inAttesa, daSegnare, saldoContabile: state.saldi.has(anno) ? round2(state.saldi.get(anno) + Number(contabilizzatiAnno.data[0]?.sum || 0)) : null
     };
     renderImportPanel();
   } catch (error) {
@@ -855,11 +861,12 @@ function renderImportPanel() {
     <p>${imp.totale} movimenti nel file (dal ${formatDate(imp.dal)} al ${formatDate(imp.al)}):
       <strong>${imp.nuovi.length} nuovi</strong>, ${imp.totale - imp.nuovi.length} già presenti (saltati).
       Nuove entrate <strong class="positive">${formatEuro(entrate)}</strong>, nuove uscite <strong class="negative">${formatEuro(uscite)}</strong>.</p>
-    ${inAttesaNuovi || imp.inAttesa.length ? `<p class="hint import-attesa">
+    ${inAttesaNuovi || imp.inAttesa.length || imp.daSegnare.length ? `<p class="hint import-attesa">
       ${inAttesaNuovi === 1 ? '1 dei nuovi non è ancora contabilizzato: entra segnato "in attesa".'
         : inAttesaNuovi ? `${inAttesaNuovi} dei nuovi non sono ancora contabilizzati: entrano segnati "in attesa".` : ""}
       ${imp.inAttesa.length === 1 ? "1 movimento in attesa già nel database in questo periodo viene sostituito da quello che dice il file."
         : imp.inAttesa.length ? `${imp.inAttesa.length} movimenti in attesa già nel database in questo periodo vengono sostituiti da quello che dice il file.` : ""}
+      ${imp.daSegnare.length ? `${imp.daSegnare.length} ${imp.daSegnare.length === 1 ? "movimento già presente risulta" : "movimenti già presenti risultano"} non ancora contabilizzati: ${imp.daSegnare.length === 1 ? "viene segnato" : "vengono segnati"} "in attesa".` : ""}
     </p>` : ""}
     <p class="controllo-saldo">
       <label>Controllo (facoltativo): saldo contabile di oggi nell'app Intesa
@@ -885,8 +892,8 @@ function renderImportPanel() {
         </table></div>
       </details>` : ""}
     <div class="box-actions">
-      ${imp.nuovi.length || imp.inAttesa.length ? `<button id="import-confirm" class="primary-button" type="button">${imp.nuovi.length ? `Importa ${imp.nuovi.length} movimenti` : "Aggiorna"}</button>` : ""}
-      <button id="import-cancel" class="secondary-button" type="button">${imp.nuovi.length || imp.inAttesa.length ? "Annulla" : "Chiudi"}</button>
+      ${imp.nuovi.length || imp.inAttesa.length || imp.daSegnare.length ? `<button id="import-confirm" class="primary-button" type="button">${imp.nuovi.length ? `Importa ${imp.nuovi.length} movimenti` : "Aggiorna"}</button>` : ""}
+      <button id="import-cancel" class="secondary-button" type="button">${imp.nuovi.length || imp.inAttesa.length || imp.daSegnare.length ? "Annulla" : "Chiudi"}</button>
     </div>`;
   elements.importPanel.classList.remove("hidden");
   elements.importPanel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -954,14 +961,19 @@ async function confermaImportazione() {
       const { error } = await state.supabase.from("movimenti").insert(righe.slice(i, i + 500));
       if (error) throw error;
     }
-    // 3. Solo dopo (se qualcosa va storto i vecchi restano): via i movimenti in attesa che il
+    // 3. Già presenti ma ancora in attesa per il file: si segnano
+    if (imp.daSegnare.length) {
+      const { error } = await state.supabase.from("movimenti").update({ contabilizzato: false }).in("id", imp.daSegnare);
+      if (error) throw error;
+    }
+    // 4. Solo dopo (se qualcosa va storto i vecchi restano): via i movimenti in attesa che il
     // file ha sostituito
     const sostituiti = imp.inAttesa.map((r) => r.id);
     for (let i = 0; i < sostituiti.length; i += 200) {
       const { error } = await state.supabase.from("movimenti").delete().in("id", sostituiti.slice(i, i + 200));
       if (error) throw error;
     }
-    showFeedback(`Importati ${righe.length} movimenti da "${imp.nomeFile}"${sostituiti.length ? `, sostituiti ${sostituiti.length} in attesa` : ""}.`);
+    showFeedback(`Importati ${righe.length} movimenti da "${imp.nomeFile}"${sostituiti.length ? `, sostituiti ${sostituiti.length} in attesa` : ""}${imp.daSegnare.length ? `, ${imp.daSegnare.length} segnati in attesa` : ""}.`);
     state.importazione = null;
     renderImportPanel();
     await reload();

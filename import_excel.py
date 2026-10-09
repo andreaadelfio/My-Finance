@@ -139,7 +139,8 @@ def read_table(sheet, header_row, default_tipo=None):
         if not data or importo is None or importo == 0:
             continue
         categoria = text(get("categoria"))
-        # Estratto Intesa: "CONTABILIZZATO" o no (movimento in attesa); senza colonna = contabilizzato
+        # Estratto Intesa: "SI"/"NO" (o "CONTABILIZZATO"/"NON CONTABILIZZATO" negli export più
+        # vecchi); senza colonna = contabilizzato
         stato = text(get("contabilizzazione")).upper()
         movimenti.append({
             "data": data,
@@ -149,7 +150,7 @@ def read_table(sheet, header_row, default_tipo=None):
             "tipo": default_tipo or ("uscita" if importo < 0 else "entrata"),
             "importo": round(importo, 2),
             "note": text(get("note")) or None,
-            "contabilizzato": not stato or stato == "CONTABILIZZATO",
+            "contabilizzato": stato in ("", "SI", "SÌ", "CONTABILIZZATO"),
         })
     return movimenti
 
@@ -344,6 +345,12 @@ def main():
         for r in tutti if r["contabilizzato"]
     )
     in_attesa = [r for r in tutti if not r["contabilizzato"]]
+    # id dei contabilizzati per chiave: se il file dice che uno di questi è ancora in attesa
+    # (es. importato con una versione che non leggeva lo stato) lo si segna
+    id_presenti = {}
+    for r in tutti:
+        if r["contabilizzato"]:
+            id_presenti.setdefault(movimento_key(r["data"], r["importo"], r["operazione"], r["dettagli"]), []).append(r["id"])
     # Le operazioni "domani" si confrontano senza la data (che cambia ogni giorno) e senza
     # l'importo (lo aggiorna la Edge Function "aggiorna-quotazioni")
     def chiave_investimento(r):
@@ -358,11 +365,14 @@ def main():
     # più quelli inseriti dai file precedenti): due file che si sovrappongono non creano doppioni
     for path, movimenti, year, budget, saldo, investimenti in files:
         disponibili = presenti.copy()
-        da_inserire = []
+        id_disponibili = {k: list(v) for k, v in id_presenti.items()}
+        da_inserire, da_segnare = [], []
         for m in movimenti:
             key = movimento_key(m["data"], m["importo"], m["operazione"], m["dettagli"])
             if disponibili[key] > 0:
                 disponibili[key] -= 1
+                if not m["contabilizzato"] and id_disponibili.get(key):
+                    da_segnare.append(id_disponibili[key].pop(0))
                 continue
             da_inserire.append({
                 "data": m["data"],
@@ -374,6 +384,9 @@ def main():
                 "contabilizzato": m["contabilizzato"],
             })
         db.insert("movimenti", da_inserire)
+        for start in range(0, len(da_segnare), 200):
+            db.request("PATCH", f"movimenti?id=in.({','.join(map(str, da_segnare[start:start + 200]))})",
+                       {"contabilizzato": False})
         # Dopo l'inserimento (se qualcosa va storto i vecchi restano): via i movimenti in attesa
         # che erano nel database nel periodo coperto dal file
         if movimenti:
@@ -404,7 +417,8 @@ def main():
 
         print(f"{path.name}: {len(da_inserire)} movimenti nuovi, "
               f"{len(movimenti) - len(da_inserire)} già presenti, "
-              f"{sum(not m['contabilizzato'] for m in da_inserire)} in attesa di contabilizzazione, budget {year} aggiornati: {len(budget)}, "
+              f"{sum(not m['contabilizzato'] for m in da_inserire)} in attesa di contabilizzazione "
+              f"(+{len(da_segnare)} già presenti segnati in attesa), budget {year} aggiornati: {len(budget)}, "
               f"{len(nuovi_investimenti)} operazioni investimenti nuove")
 
     # Riepiloghi annuali (Pre 2023) e saldi a inizio anno che ne derivano:
