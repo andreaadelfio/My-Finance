@@ -10,6 +10,7 @@ const state = {
   years: [],
   categorie: [],
   aggregati: [], // somme per anno, mese e categoria calcolate dal database
+  giorni: [], // somme dei movimenti per giorno (curva del saldo)
   budget: [],
   saldi: new Map(), // anno -> saldo del conto a inizio anno
   riepiloghi: new Map(), // anno -> { mesi, entrate, uscite } dal foglio "Pre 2023"
@@ -20,6 +21,7 @@ const state = {
   fineco: null, // conto Fineco: { tipi: Map(tipo -> somma), liquidita, ultimaData }
   costiFineco: [], // costi e interessi del conto Fineco, come righe (sola lettura) del registro
   contoOggi: null, // saldo del conto Intesa a oggi: saldo a inizio anno + movimenti dell'anno
+  contoInAttesa: 0, // di cui movimenti dell'anno non ancora contabilizzati dalla banca
   usciteMese: [], // uscite del mese in corso per categoria: [{ categoria_id, speso }]
   importFineco: null, // anteprima dell'estratto Fineco in corso di importazione
   watchlist: [], // titoli della sezione Proposte con segnale e motivi (senza lo storico, caricato a richiesta)
@@ -73,6 +75,8 @@ const elements = {
   mappaturaPanel: document.querySelector("#mappatura-panel"),
   listaFine: document.querySelector("#lista-fine"),
   saldoValore: document.querySelector("#saldo-valore"),
+  saldoOggi: document.querySelector("#saldo-oggi"),
+  saldoOggiData: document.querySelector("#saldo-oggi-data"),
   budgetHint: document.querySelector("#budget-hint"),
   andamentoTable: document.querySelector("#andamento-table"),
 
@@ -238,10 +242,16 @@ async function loadData() {
       .order("mese");
     return state.year === null ? query : query.eq("anno", state.year);
   };
+  // Somma dei movimenti giorno per giorno, per la curva del saldo
+  const giorniQuery = () => {
+    const query = state.supabase.from("movimenti").select("data,categoria_id,importo.sum()").order("data");
+    return state.year === null ? query : query.eq("anno", state.year);
+  };
   const numero = (v) => (v === null || v === undefined ? null : Number(v));
-  const [categorie, aggregati, budget, saldi, investimenti, mappatura, riepiloghi] = await Promise.all([
+  const [categorie, aggregati, giorni, budget, saldi, investimenti, mappatura, riepiloghi] = await Promise.all([
     fetchAll(() => state.supabase.from("categorie").select("*").order("id")),
     fetchAll(aggregatiQuery),
+    fetchAll(giorniQuery),
     fetchAll(() => state.supabase.from("budget").select("*").order("id")),
     fetchAll(() => state.supabase.from("saldi").select("*").order("anno")),
     fetchAll(() => state.supabase.from("investimenti").select("*").order("data").order("id")),
@@ -264,14 +274,16 @@ async function loadData() {
   // per categoria, indipendenti dall'anno scelto nella Dashboard
   const adesso = new Date();
   const [movimentiAnno, usciteMese] = await Promise.all([
-    state.supabase.from("movimenti").select("importo.sum()").eq("anno", adesso.getFullYear()),
+    state.supabase.from("movimenti").select("contabilizzato,importo.sum()").eq("anno", adesso.getFullYear()),
     state.supabase.from("movimenti").select("categoria_id,importo.sum()")
       .eq("anno", adesso.getFullYear()).eq("mese", adesso.getMonth() + 1).lt("importo", 0)
   ]);
   if (movimentiAnno.error) throw movimentiAnno.error;
   if (usciteMese.error) throw usciteMese.error;
   const saldoInizio = saldi.find((s) => s.anno === adesso.getFullYear());
-  state.contoOggi = saldoInizio ? round2(Number(saldoInizio.saldo_iniziale) + Number(movimentiAnno.data[0]?.sum || 0)) : null;
+  const sommaAnno = movimentiAnno.data.reduce((s, r) => s + Number(r.sum), 0);
+  state.contoOggi = saldoInizio ? round2(Number(saldoInizio.saldo_iniziale) + sommaAnno) : null;
+  state.contoInAttesa = round2(Number(movimentiAnno.data.find((r) => r.contabilizzato === false)?.sum || 0));
   state.usciteMese = usciteMese.data.map((r) => ({ categoria_id: r.categoria_id, speso: -Number(r.sum) }));
 
   // Conto Fineco: totali per tipo sommati dal database (anche questa tabella è facoltativa)
@@ -316,6 +328,7 @@ async function loadData() {
     somma: Number(riga.sum),
     operazioni: Number(riga.count)
   }));
+  state.giorni = giorni.map((riga) => ({ data: riga.data, categoria_id: riga.categoria_id, somma: Number(riga.sum) }));
   state.budget = budget.map((riga) => ({ ...riga, importo_mensile: Number(riga.importo_mensile) }));
   state.saldi = new Map(saldi.map((riga) => [riga.anno, Number(riga.saldo_iniziale)]));
   state.riepiloghi = new Map(riepiloghi.map((riga) => [riga.anno, {
@@ -809,9 +822,13 @@ async function handleExcelFile(file) {
       voce.conteggio += 1;
       daDecidere.set(m.categoriaBanca, voce);
     }
+    // Quelli da segnare in attesa nel database contano ancora come contabilizzati: si tolgono
+    const daTogliere = esistenti
+      .filter((r) => daSegnare.includes(r.id) && r.data.startsWith(String(anno)))
+      .reduce((s, r) => s + Number(r.importo), 0);
     state.importazione = {
-      nomeFile: file.name, totale: movimenti.length, dal: date[0], al: date[date.length - 1], nuovi, daDecidere,
-      inAttesa, daSegnare, saldoContabile: state.saldi.has(anno) ? round2(state.saldi.get(anno) + Number(contabilizzatiAnno.data[0]?.sum || 0)) : null
+      nomeFile: file.name, totale: movimenti.length, dal: date[0], al: date[date.length - 1], nuovi, daDecidere, inAttesa, daSegnare,
+      saldoContabile: state.saldi.has(anno) ? round2(state.saldi.get(anno) + Number(contabilizzatiAnno.data[0]?.sum || 0) - daTogliere) : null
     };
     renderImportPanel();
   } catch (error) {
@@ -899,8 +916,8 @@ function renderImportPanel() {
   elements.importPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-// Saldo contabile dopo l'import (saldo a inizio anno + movimenti contabilizzati dell'anno +
-// quelli nuovi contabilizzati dell'anno nel file) confrontato con quello scritto dall'app
+// Saldo contabile dopo l'import (saldo a inizio anno + movimenti contabilizzati dell'anno, senza
+// quelli che il file dice ancora in attesa, + quelli nuovi contabilizzati dell'anno nel file) confrontato con quello scritto dall'app
 // Intesa: una differenza vuol dire movimenti mancanti o doppi
 function controllaSaldoImport() {
   const scritto = parseAmount(document.querySelector("#import-saldo").value);
@@ -1351,7 +1368,7 @@ function renderDashboard() {
   const tipo = state.tipoDashboard;
   elements.toggleButtons.forEach((button) => button.classList.toggle("active", button.dataset.tipo === tipo));
   elements.titoloGraficoLinee.textContent = {
-    sintesi: "Uscite, entrate, risparmio e saldo mensili",
+    sintesi: "Uscite, entrate e risparmio del mese e saldo, giorno per giorno",
     uscita: "Uscite per categoria nel tempo",
     entrata: "Entrate per categoria nel tempo"
   }[tipo];
@@ -1370,6 +1387,9 @@ function renderDashboard() {
   elements.saldoField.classList.toggle("hidden", tuttiGliAnni());
   const saldo = state.saldi.get(state.year);
   elements.saldoValore.textContent = saldo === undefined ? "—" : formatEuro(saldo);
+  const ultimo = saldoGiornaliero().at(-1);
+  elements.saldoOggiData.textContent = !ultimo || ultimo.data === todayISO() ? "Saldo a oggi" : `Saldo al ${formatDate(ultimo.data)}`;
+  elements.saldoOggi.textContent = ultimo ? formatEuro(ultimo.saldo) : "—";
   elements.titoloPeriodo.textContent = tuttiGliAnni() ? "Andamento annuale" : "Andamento mensile";
   renderAndamento();
   renderPatrimonio();
@@ -1409,6 +1429,8 @@ function renderPatrimonio() {
   const totale = round2(parti.reduce((s, [, valore]) => s + valore, 0));
   elements.patrimonio.innerHTML = `Patrimonio oggi <strong>${formatEuro(totale)}</strong>
     <span class="patrimonio-parti">= ${parti.map(([nome, valore]) => `${nome} ${formatEuro(valore)}`).join(" + ")}</span>
+    ${state.contoOggi !== null && state.contoInAttesa ? `<span class="patrimonio-parti">(conto Intesa: saldo contabile
+      ${formatEuro(round2(state.contoOggi - state.contoInAttesa))}, ${formatEuro(state.contoInAttesa)} in attesa)</span>` : ""}
     <span class="hint-breve" title="Investimenti aperti a prezzo di mercato (Aggiorna prezzi); BTP, E2C e quelli senza quotazione al capitale ancora investito">ⓘ</span>`;
 }
 
@@ -1556,6 +1578,9 @@ function cicloLinee(chart, i) {
 // data e i valori di quel punto, con il colore di ogni linea; le linee nascoste restano
 // barrate per poterle rimettere. chart.$titoloValori(i) dà la data del punto i.
 const valoreY = (punto) => (punto !== null && typeof punto === "object" ? punto.y : punto);
+// Valori di una linea per la riga dei valori: "$valori" quando i punti del grafico sono altri
+// (il saldo giornaliero, con il saldo a fine mese nella riga)
+const valoriPunti = (dataset) => dataset.$valori ?? dataset.data;
 
 function mostraValori(chart, indice) {
   let riga = chart.canvas.parentElement.nextElementSibling;
@@ -1576,7 +1601,7 @@ function mostraValori(chart, indice) {
     return;
   }
   const voci = chart.data.datasets
-    .map((dataset, i) => ({ dataset, i, visibile: chart.isDatasetVisible(i), valore: valoreY(dataset.data[indice]) }))
+    .map((dataset, i) => ({ dataset, i, visibile: chart.isDatasetVisible(i), valore: valoreY(valoriPunti(dataset)[indice]) }))
     .filter((v) => !v.visibile || (v.valore !== null && v.valore !== undefined && v.valore !== 0));
   // Con tante linee (categorie) dal valore più grande; altrimenti nell'ordine delle linee.
   // Le nascoste in fondo.
@@ -1595,7 +1620,8 @@ function mostraValori(chart, indice) {
 const valoriSottoIlGrafico = {
   enabled: false,
   external: ({ chart, tooltip }) => {
-    const indice = tooltip.dataPoints?.[0]?.dataIndex;
+    const punto = tooltip.dataPoints?.[0];
+    const indice = punto && (chart.$mesePunto ? chart.$mesePunto(punto) : punto.dataIndex);
     if (indice !== undefined && tooltip.opacity !== 0 && indice !== chart.$indiceValori) mostraValori(chart, indice);
   }
 };
@@ -1668,7 +1694,7 @@ function zoomPulsante(canvas, fattore) {
   const categorie = scala.type === "category";
   const indice = chart.$indiceValori;
   const centro = indice === null || indice === undefined ? (scala.min + scala.max) / 2
-    : categorie ? indice : valoreXPunto(chart, indice);
+    : categorie || chart.$mesePunto ? indice : valoreXPunto(chart, indice);
   const ampiezza = Math.min(intero.max - intero.min, Math.max(canvas.$ampiezzaMinima, (scala.max - scala.min) * fattore));
   let min = centro - ampiezza / 2;
   let max = centro + ampiezza / 2;
@@ -1692,8 +1718,8 @@ function iniziaValori(key, titolo, fino) {
   const chart = state.charts[key];
   if (!chart) return;
   chart.$titoloValori = titolo;
-  let indice = Math.min(fino ?? Infinity, Math.max(...chart.data.datasets.map((d) => d.data.length)) - 1);
-  while (indice > 0 && !chart.data.datasets.some((d) => ![null, undefined, 0].includes(valoreY(d.data[indice])))) indice -= 1;
+  let indice = Math.min(fino ?? Infinity, Math.max(...chart.data.datasets.map((d) => valoriPunti(d).length)) - 1);
+  while (indice > 0 && !chart.data.datasets.some((d) => ![null, undefined, 0].includes(valoreY(valoriPunti(d)[indice])))) indice -= 1;
   mostraValori(chart, indice);
 }
 
@@ -1783,37 +1809,128 @@ function soloFinoAOggi(elenco, valori) {
   });
 }
 
+// Movimenti giorno per giorno divisi in entrate e uscite (come la tabella: una spesa con il
+// segno + in una categoria di uscita, es. un rimborso, riduce le uscite)
+function movimentiGiornalieri() {
+  const giorni = new Map();
+  for (const riga of state.giorni) {
+    if (!giorni.has(riga.data)) giorni.set(riga.data, { data: riga.data, entrate: 0, uscite: 0 });
+    const giorno = giorni.get(riga.data);
+    if (tipoAggregato(riga) === "uscita") giorno.uscite -= riga.somma;
+    else giorno.entrate += riga.somma;
+  }
+  return [...giorni.values()];
+}
+
+// Saldo del conto alla fine di ogni giorno con movimenti: riparte dal saldo a inizio anno di
+// ogni anno che lo ha impostato (come il saldo a fine mese della tabella)
+function saldoGiornaliero() {
+  const punti = [];
+  let anno = null;
+  let saldo = null;
+  for (const { data, entrate, uscite } of movimentiGiornalieri()) {
+    const a = Number(data.slice(0, 4));
+    if (a !== anno) {
+      anno = a;
+      if (state.saldi.has(a)) saldo = state.saldi.get(a);
+    }
+    if (saldo === null) continue;
+    saldo = round2(saldo + entrate - uscite);
+    punti.push({ data, saldo });
+  }
+  return punti;
+}
+
 function renderCharts() {
   const elenco = periodiAndamento(true);
   const { entrate, uscite, risparmio, saldi } = andamento(elenco);
+  // Asse x numerico: il mese i-esimo è il punto i e il giorno g del mese sta a
+  // i + (g-1)/giorni del mese (come la linea di oggi), così le linee sono giornaliere
+  const indice = new Map(elenco.map((p, i) => [p.key, i]));
+  const posizione = (data) => {
+    const [a, m, g] = data.split("-").map(Number);
+    const i = indice.get(`${a}-${m}`);
+    return i === undefined ? null : i + (g - 1) / new Date(a, m, 0).getDate();
+  };
+  const curva = saldoGiornaliero().map((p) => ({ x: posizione(p.data), y: p.saldo })).filter((p) => p.x !== null);
+  // Uscite, entrate e risparmio dall'inizio del mese: ogni mese ripartono da 0 e l'ultimo
+  // giorno arrivano al totale del mese
+  const progressivi = { uscite: [], entrate: [], risparmio: [] };
+  const finoAOggi = soloFinoAOggi(elenco, elenco.map(() => 0));
+  elenco.forEach((p, i) => {
+    if (finoAOggi[i] === null || p.stima) return;
+    for (const linea of Object.values(progressivi)) linea.push({ x: i, y: 0 });
+  });
+  const somme = new Map(); // mese -> [uscite, entrate] dall'inizio del mese
+  for (const giorno of movimentiGiornalieri()) {
+    const x = posizione(giorno.data);
+    if (x === null) continue;
+    const [u, e] = somme.get(Math.floor(x)) || [0, 0];
+    const totali = [round2(u + giorno.uscite), round2(e + giorno.entrate)];
+    somme.set(Math.floor(x), totali);
+    progressivi.uscite.push({ x, y: totali[0] });
+    progressivi.entrate.push({ x, y: totali[1] });
+    progressivi.risparmio.push({ x, y: round2(totali[1] - totali[0]) });
+  }
+  // Mesi del foglio "Pre 2023" (senza movimenti): i valori stimati del mese, per tutto il mese
+  elenco.forEach((p, i) => {
+    if (!p.stima) return;
+    for (const x of [i, i + 0.97]) {
+      progressivi.uscite.push({ x, y: uscite[i] });
+      progressivi.entrate.push({ x, y: entrate[i] });
+      progressivi.risparmio.push({ x, y: risparmio[i] });
+    }
+    if (saldi[i] !== null) curva.push({ x: i + 0.97, y: saldi[i] });
+  });
+  for (const linea of [curva, ...Object.values(progressivi)]) linea.sort((a, b) => a.x - b.x);
+  // Linee a gradini (cambiano solo nei giorni con movimenti) con l'ultimo punto in evidenza;
+  // nella riga dei valori i totali del mese ("$valori")
+  const linea = (label, colore, punti, mensili) => ({
+    label, data: punti, $valori: soloFinoAOggi(elenco, mensili), stepped: true,
+    pointRadius: (ctx) => (ctx.dataIndex === punti.length - 1 ? 4 : 0),
+    borderColor: colore, backgroundColor: colore
+  });
+  const asse = asseMesi();
   drawChart("andamento", elements.chartAndamento, {
     type: "line",
     data: {
-      labels: elenco.map((p) => p.label),
       datasets: [
-        { label: "Totale Uscite", data: soloFinoAOggi(elenco, uscite), borderColor: "#c0392b", backgroundColor: "#c0392b" },
-        { label: "Totale Entrate", data: soloFinoAOggi(elenco, entrate), borderColor: "#2e8b57", backgroundColor: "#2e8b57" },
-        { label: "Risparmio", data: soloFinoAOggi(elenco, risparmio), borderColor: "#2f6fbf", backgroundColor: "#2f6fbf" },
-        { label: "Saldo a fine mese", data: soloFinoAOggi(elenco, saldi), borderColor: "#8a8a8a", backgroundColor: "#8a8a8a" }
+        linea("Totale Uscite", "#c0392b", progressivi.uscite, uscite),
+        linea("Totale Entrate", "#2e8b57", progressivi.entrate, entrate),
+        linea("Risparmio", "#2f6fbf", progressivi.risparmio, risparmio),
+        linea("Saldo", "#8a8a8a", curva, saldi)
       ]
     },
     options: {
       maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      elements: { point: { radius: tuttiGliAnni() ? 0 : 3 } },
+      interaction: { mode: "nearest", axis: "x", intersect: false },
       // Mesi del foglio "Pre 2023" (medie mensili): linea tratteggiata
-      datasets: { line: { segment: { borderDash: (ctx) => (elenco[ctx.p1DataIndex]?.stima ? [5, 4] : undefined) } } },
+      datasets: { line: { segment: { borderDash: (ctx) => (elenco[Math.floor(ctx.p1.parsed.x)]?.stima ? [5, 4] : undefined) } } },
       plugins: {
         legend: senzaLegenda(),
         zoom: opzioniZoom(elements.chartAndamento, 2), // almeno due mesi
         lineaOggi: { posizione: posizioneOggiMesi(elenco) },
         tooltip: valoriSottoIlGrafico
       },
-      scales: { ...euroAxis, x: asseMesi() },
+      scales: {
+        ...euroAxis,
+        x: {
+          type: "linear",
+          min: 0,
+          max: Math.max(elenco.length - 1, curva.at(-1)?.x ?? 0),
+          // una tacca (e una riga della griglia) per mese, come l'asse a etichette
+          afterBuildTicks: (scala) => {
+            scala.ticks = elenco.map((_, i) => ({ value: i })).filter((t) => t.value >= scala.min && t.value <= scala.max);
+          },
+          ticks: { ...asse.ticks, callback: (valore) => elenco[valore]?.label ?? "" }
+        }
+      },
       layout: { padding: { top: 14 } }
     },
     plugins: [lineaOggi, lineaCursore]
   });
+  // Punto toccato (un giorno) -> mese della riga dei valori
+  if (state.charts.andamento) state.charts.andamento.$mesePunto = (punto) => Math.min(elenco.length - 1, Math.floor(punto.parsed.x + 1e-6));
   iniziaValori("andamento", (i) => `${titoloMese(elenco[i])}${elenco[i].stima ? " (media mensile dal foglio Pre 2023)" : ""}`, Math.floor(posizioneOggiMesi(elenco) ?? Infinity));
 }
 

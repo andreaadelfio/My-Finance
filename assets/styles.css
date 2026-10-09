@@ -317,6 +317,14 @@ input {
   font-variant-numeric: tabular-nums;
 }
 
+#saldo-field {
+  gap: 0.25rem 1rem;
+}
+
+#saldo-field > span {
+  white-space: nowrap;
+}
+
 /* Import da Excel e mappatura */
 
 .excel-button {

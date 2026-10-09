@@ -15,7 +15,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon-192.png">
-    <link rel="stylesheet" href="./assets/styles.css?v=51">
+    <link rel="stylesheet" href="./assets/styles.css?v=52">
   </head>
   <body>
     <div class="page-shell">
@@ -105,10 +105,10 @@
             <button type="button" class="toggle-button" data-tipo="uscita">Uscite</button>
             <button type="button" class="toggle-button" data-tipo="entrata">Entrate</button>
           </div>
-          <!-- Calcolato dall'import (conto a fine anno precedente): solo da leggere -->
+          <!-- Saldo a inizio anno (dall'import, solo da leggere) e all'ultimo giorno con movimenti -->
           <p id="saldo-field" class="saldo-field">
-            Saldo del conto a inizio anno
-            <strong id="saldo-valore" class="saldo-valore"></strong>
+            <span>Saldo a inizio anno <strong id="saldo-valore" class="saldo-valore"></strong></span>
+            <span><span id="saldo-oggi-data">Saldo a oggi</span> <strong id="saldo-oggi" class="saldo-valore"></strong></span>
           </p>
         </div>
 
@@ -301,6 +301,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=68"></script>
+    <script type="module" src="./assets/app.js?v=74"></script>
   </body>
 </html>
