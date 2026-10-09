@@ -1553,3 +1553,19 @@ tr.editing .check-field {
   font-size: 1.1rem;
   line-height: 1.2;
 }
+
+/* Movimenti non ancora contabilizzati dalla banca */
+.tag-attesa {
+  display: inline-block;
+  padding: 0 0.35rem;
+  border-radius: 6px;
+  background: #fbefc9;
+  color: #7a5a00;
+  font-size: 0.72rem;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.movimenti-table tr.in-attesa td {
+  font-style: italic;
+}

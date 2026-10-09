@@ -490,8 +490,8 @@ function renderMovimenti() {
     elements.movimentiBody.innerHTML = `<tr><td colspan="7" class="empty">${lista.finita ? "Nessun movimento con questi filtri." : "Caricamento..."}</td></tr>`;
   } else {
     elements.movimentiBody.innerHTML = lista.righe.map((movimento) => (movimento.id === state.editingId ? rigaInModifica(movimento) : `
-    <tr>
-      <td data-label="Data">${formatDate(movimento.data)}</td>
+    <tr class="${movimento.contabilizzato === false ? "in-attesa" : ""}">
+      <td data-label="Data">${formatDate(movimento.data)}${movimento.contabilizzato === false ? ' <span class="tag-attesa" title="Non ancora contabilizzato dalla banca: al prossimo import viene sostituito da quello vero">in attesa</span>' : ""}</td>
       <td data-label="Operazione">
         <span class="operazione">${escapeHtml(movimento.operazione)}</span>
         ${movimento.dettagli ? `<span class="dettagli" title="${escapeHtml(movimento.dettagli)}">${escapeHtml(movimento.dettagli)}</span>` : ""}
@@ -709,8 +709,11 @@ function leggiTabella(righe, rigaIntestazione, tipoFoglio = null) {
     const grezzo = valore(riga, "importo");
     const importo = typeof grezzo === "number" ? grezzo : parseAmount(grezzo);
     if (!data || importo === null || importo === 0) return null;
+    // Estratto Intesa: "CONTABILIZZATO" oppure in attesa; senza la colonna vale contabilizzato
+    const stato = testo(valore(riga, "contabilizzazione")).toUpperCase();
     return {
       data,
+      contabilizzato: !stato || stato === "CONTABILIZZATO",
       operazione: testo(valore(riga, "operazione")),
       dettagli: testo(valore(riga, "dettagli")),
       categoriaBanca: testo(valore(riga, "categoria")),
@@ -766,15 +769,24 @@ async function handleExcelFile(file) {
       return;
     }
     const date = movimenti.map((m) => m.data).sort();
-    const esistenti = await fetchAll(() => state.supabase
-      .from("movimenti")
-      .select("data,importo,operazione,dettagli")
-      .gte("data", date[0])
-      .lte("data", date[date.length - 1])
-      .order("id"));
+    const anno = new Date().getFullYear();
+    const [esistenti, contabilizzatiAnno] = await Promise.all([
+      fetchAll(() => state.supabase
+        .from("movimenti")
+        .select("id,data,importo,operazione,dettagli,contabilizzato")
+        .gte("data", date[0])
+        .lte("data", date[date.length - 1])
+        .order("id")),
+      state.supabase.from("movimenti").select("importo.sum()").eq("anno", anno).eq("contabilizzato", true)
+    ]);
+    if (contabilizzatiAnno.error) throw contabilizzatiAnno.error;
+    // I movimenti in attesa già nel database, nel periodo del file, vengono sostituiti da quello
+    // che dice il file (contabilizzati, ancora in attesa o spariti se annullati): il confronto
+    // si fa solo con i contabilizzati
+    const inAttesa = esistenti.filter((r) => !r.contabilizzato);
     // I doppioni veri si contano: 2 righe uguali nel file e 1 nel database -> se ne aggiunge 1
     const presenti = new Map();
-    for (const r of esistenti) {
+    for (const r of esistenti.filter((e) => e.contabilizzato)) {
       const key = chiaveMovimento(r.data, r.importo, r.operazione, r.dettagli);
       presenti.set(key, (presenti.get(key) || 0) + 1);
     }
@@ -791,7 +803,10 @@ async function handleExcelFile(file) {
       voce.conteggio += 1;
       daDecidere.set(m.categoriaBanca, voce);
     }
-    state.importazione = { nomeFile: file.name, totale: movimenti.length, dal: date[0], al: date[date.length - 1], nuovi, daDecidere };
+    state.importazione = {
+      nomeFile: file.name, totale: movimenti.length, dal: date[0], al: date[date.length - 1], nuovi, daDecidere,
+      inAttesa, saldoContabile: state.saldi.has(anno) ? round2(state.saldi.get(anno) + Number(contabilizzatiAnno.data[0]?.sum || 0)) : null
+    };
     renderImportPanel();
   } catch (error) {
     console.error(error);
@@ -816,6 +831,7 @@ function renderImportPanel() {
   }
   const entrate = imp.nuovi.filter((m) => m.importo > 0).reduce((sum, m) => sum + m.importo, 0);
   const uscite = imp.nuovi.filter((m) => m.importo < 0).reduce((sum, m) => sum - m.importo, 0);
+  const inAttesaNuovi = imp.nuovi.filter((m) => !m.contabilizzato).length;
   const decisioni = [...imp.daDecidere.entries()].map(([nome, voce]) => `
     <tr>
       <td>${escapeHtml(nome)}</td>
@@ -839,6 +855,12 @@ function renderImportPanel() {
     <p>${imp.totale} movimenti nel file (dal ${formatDate(imp.dal)} al ${formatDate(imp.al)}):
       <strong>${imp.nuovi.length} nuovi</strong>, ${imp.totale - imp.nuovi.length} già presenti (saltati).
       Nuove entrate <strong class="positive">${formatEuro(entrate)}</strong>, nuove uscite <strong class="negative">${formatEuro(uscite)}</strong>.</p>
+    ${inAttesaNuovi || imp.inAttesa.length ? `<p class="hint import-attesa">
+      ${inAttesaNuovi === 1 ? '1 dei nuovi non è ancora contabilizzato: entra segnato "in attesa".'
+        : inAttesaNuovi ? `${inAttesaNuovi} dei nuovi non sono ancora contabilizzati: entrano segnati "in attesa".` : ""}
+      ${imp.inAttesa.length === 1 ? "1 movimento in attesa già nel database in questo periodo viene sostituito da quello che dice il file."
+        : imp.inAttesa.length ? `${imp.inAttesa.length} movimenti in attesa già nel database in questo periodo vengono sostituiti da quello che dice il file.` : ""}
+    </p>` : ""}
     <p class="controllo-saldo">
       <label>Controllo (facoltativo): saldo contabile di oggi nell'app Intesa
         <input id="import-saldo" type="text" inputmode="decimal" placeholder="es. 1.234,56" autocomplete="off"> €</label>
@@ -857,22 +879,22 @@ function renderImportPanel() {
         <div class="table-wrap import-preview"><table class="summary-table">
           <thead><tr><th>Data</th><th>Operazione</th><th>Categoria</th><th class="num">Importo</th></tr></thead>
           <tbody>${imp.nuovi.map((m) => `
-            <tr><td>${formatDate(m.data)}</td><td>${escapeHtml(m.operazione)}</td><td>${nomeCategoria(m)}</td>
+            <tr><td>${formatDate(m.data)}${m.contabilizzato ? "" : ' <span class="tag-attesa">in attesa</span>'}</td><td>${escapeHtml(m.operazione)}</td><td>${nomeCategoria(m)}</td>
             <td class="num ${m.importo < 0 ? "negative" : "positive"}">${formatNumber(m.importo)}</td></tr>`).join("")}
           </tbody>
         </table></div>
       </details>` : ""}
     <div class="box-actions">
-      ${imp.nuovi.length ? `<button id="import-confirm" class="primary-button" type="button">Importa ${imp.nuovi.length} movimenti</button>` : ""}
-      <button id="import-cancel" class="secondary-button" type="button">${imp.nuovi.length ? "Annulla" : "Chiudi"}</button>
+      ${imp.nuovi.length || imp.inAttesa.length ? `<button id="import-confirm" class="primary-button" type="button">${imp.nuovi.length ? `Importa ${imp.nuovi.length} movimenti` : "Aggiorna"}</button>` : ""}
+      <button id="import-cancel" class="secondary-button" type="button">${imp.nuovi.length || imp.inAttesa.length ? "Annulla" : "Chiudi"}</button>
     </div>`;
   elements.importPanel.classList.remove("hidden");
   elements.importPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-// Saldo del conto dopo l'import (saldo a inizio anno + movimenti dell'anno + quelli nuovi
-// dell'anno nel file) confrontato con quello scritto dall'app Intesa: una differenza vuol dire
-// movimenti mancanti o doppi
+// Saldo contabile dopo l'import (saldo a inizio anno + movimenti contabilizzati dell'anno +
+// quelli nuovi contabilizzati dell'anno nel file) confrontato con quello scritto dall'app
+// Intesa: una differenza vuol dire movimenti mancanti o doppi
 function controllaSaldoImport() {
   const scritto = parseAmount(document.querySelector("#import-saldo").value);
   const esito = document.querySelector("#import-saldo-esito");
@@ -880,19 +902,18 @@ function controllaSaldoImport() {
     esito.textContent = "";
     return;
   }
-  if (state.contoOggi === null) {
+  if (state.importazione.saldoContabile === null) {
     esito.innerHTML = '<span class="negative">manca il saldo a inizio anno: non posso confrontare</span>';
     return;
   }
   const anno = String(new Date().getFullYear());
-  const nuovi = state.importazione.nuovi.filter((m) => m.data.startsWith(anno)).reduce((s, m) => s + m.importo, 0);
-  const calcolato = round2(state.contoOggi + nuovi);
+  const nuovi = state.importazione.nuovi.filter((m) => m.contabilizzato && m.data.startsWith(anno)).reduce((s, m) => s + m.importo, 0);
+  const calcolato = round2(state.importazione.saldoContabile + nuovi);
   const differenza = round2(scritto - calcolato);
   esito.innerHTML = Math.abs(differenza) < 0.01
     ? `<span class="positive">✓ uguale al saldo calcolato (${formatEuro(calcolato)})</span>`
     : `<span class="negative">saldo calcolato ${formatEuro(calcolato)}: differenza ${formatEuro(differenza)}
-        (${differenza > 0 ? "mancano entrate o ci sono uscite di troppo" : "mancano uscite o ci sono entrate di troppo"};
-        controlla anche i movimenti non ancora contabilizzati)</span>`;
+        (${differenza > 0 ? "mancano entrate o ci sono uscite di troppo" : "mancano uscite o ci sono entrate di troppo"})</span>`;
 }
 
 async function confermaImportazione() {
@@ -926,13 +947,21 @@ async function confermaImportazione() {
       dettagli: m.dettagli,
       categoria_id: risolviCategoria(m.categoriaBanca, m.tipo) ?? null,
       importo: m.importo,
-      note: m.note
+      note: m.note,
+      contabilizzato: m.contabilizzato
     }));
     for (let i = 0; i < righe.length; i += 500) {
       const { error } = await state.supabase.from("movimenti").insert(righe.slice(i, i + 500));
       if (error) throw error;
     }
-    showFeedback(`Importati ${righe.length} movimenti da "${imp.nomeFile}".`);
+    // 3. Solo dopo (se qualcosa va storto i vecchi restano): via i movimenti in attesa che il
+    // file ha sostituito
+    const sostituiti = imp.inAttesa.map((r) => r.id);
+    for (let i = 0; i < sostituiti.length; i += 200) {
+      const { error } = await state.supabase.from("movimenti").delete().in("id", sostituiti.slice(i, i + 200));
+      if (error) throw error;
+    }
+    showFeedback(`Importati ${righe.length} movimenti da "${imp.nomeFile}"${sostituiti.length ? `, sostituiti ${sostituiti.length} in attesa` : ""}.`);
     state.importazione = null;
     renderImportPanel();
     await reload();

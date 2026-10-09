@@ -31,6 +31,11 @@ alter table public.movimenti
 alter table public.movimenti
   add column if not exists mese smallint generated always as (extract(month from data)::smallint) stored;
 
+-- Movimenti non ancora contabilizzati dalla banca (colonna "Contabilizzazione" dell'estratto
+-- Intesa): restano segnati finché un import successivo non li sostituisce con quelli veri
+alter table public.movimenti
+  add column if not exists contabilizzato boolean not null default true;
+
 -- Budget mensile per categoria di uscita, per anno
 create table if not exists public.budget (
   id bigint generated always as identity primary key,

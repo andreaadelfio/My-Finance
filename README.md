@@ -99,7 +99,13 @@ il sito non scarica tutti i movimenti.
   viene ricordata. Poi "Importa".
   L'export Intesa non riporta il saldo: nell'anteprima si può scrivere il saldo contabile di
   oggi che mostra l'app Intesa, e il sito lo confronta con quello calcolato dopo l'import
-  (saldo a inizio anno + movimenti dell'anno). Una differenza vuol dire movimenti mancanti o doppi.
+  (saldo a inizio anno + movimenti contabilizzati dell'anno). Una differenza vuol dire movimenti
+  mancanti o doppi.
+  I movimenti **non ancora contabilizzati** (colonna "Contabilizzazione" dell'estratto Intesa)
+  entrano con `contabilizzato = false` e nella lista hanno l'etichetta "in attesa". Al prossimo
+  import, quelli in attesa del periodo coperto dal file vengono sostituiti da quello che dice il
+  file: contabilizzati (anche se la banca ne ha cambiato data o descrizione), ancora in attesa,
+  o spariti se annullati. Lo stesso fa `import_excel.py`.
 - Oppure dal terminale con `import_excel.py` sullo stesso file.
 
 Un movimento è "già presente" se ha stessa data, importo, operazione e dettagli di uno

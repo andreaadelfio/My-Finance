@@ -139,6 +139,8 @@ def read_table(sheet, header_row, default_tipo=None):
         if not data or importo is None or importo == 0:
             continue
         categoria = text(get("categoria"))
+        # Estratto Intesa: "CONTABILIZZATO" o no (movimento in attesa); senza colonna = contabilizzato
+        stato = text(get("contabilizzazione")).upper()
         movimenti.append({
             "data": data,
             "operazione": text(get("operazione")),
@@ -147,6 +149,7 @@ def read_table(sheet, header_row, default_tipo=None):
             "tipo": default_tipo or ("uscita" if importo < 0 else "entrata"),
             "importo": round(importo, 2),
             "note": text(get("note")) or None,
+            "contabilizzato": not stato or stato == "CONTABILIZZATO",
         })
     return movimenti
 
@@ -333,10 +336,14 @@ def main():
     print(f"Categorie create: {len(nuove)}" + (f" ({', '.join(c['nome'] for c in nuove)})" if nuove else ""))
 
     # Movimenti: inserisce solo quelli non ancora presenti
+    # Si confronta con i soli movimenti contabilizzati: quelli in attesa del periodo del file
+    # vengono sostituiti da quello che dice il file (contabilizzati, ancora in attesa o spariti)
+    tutti = db.select_all("movimenti", "id,data,importo,operazione,dettagli,contabilizzato")
     presenti = Counter(
         movimento_key(r["data"], r["importo"], r["operazione"], r["dettagli"])
-        for r in db.select_all("movimenti", "data,importo,operazione,dettagli")
+        for r in tutti if r["contabilizzato"]
     )
+    in_attesa = [r for r in tutti if not r["contabilizzato"]]
     # Le operazioni "domani" si confrontano senza la data (che cambia ogni giorno) e senza
     # l'importo (lo aggiorna la Edge Function "aggiorna-quotazioni")
     def chiave_investimento(r):
@@ -364,8 +371,17 @@ def main():
                 "categoria_id": mappatura.get(m["categoria"]) or categorie.get((m["tipo"], m["categoria"])),
                 "importo": m["importo"],
                 "note": m["note"],
+                "contabilizzato": m["contabilizzato"],
             })
         db.insert("movimenti", da_inserire)
+        # Dopo l'inserimento (se qualcosa va storto i vecchi restano): via i movimenti in attesa
+        # che erano nel database nel periodo coperto dal file
+        if movimenti:
+            dal, al = min(m["data"] for m in movimenti), max(m["data"] for m in movimenti)
+            sostituiti = [r["id"] for r in in_attesa if dal <= r["data"] <= al]
+            for start in range(0, len(sostituiti), 200):
+                db.request("DELETE", f"movimenti?id=in.({','.join(map(str, sostituiti[start:start + 200]))})")
+            in_attesa = [r for r in in_attesa if r["id"] not in sostituiti]
         presenti.update(movimento_key(r["data"], r["importo"], r["operazione"], r["dettagli"]) for r in da_inserire)
 
         db.upsert("budget", [
@@ -387,7 +403,8 @@ def main():
         investimenti_presenti.update(chiave_investimento(r) for r in nuovi_investimenti)
 
         print(f"{path.name}: {len(da_inserire)} movimenti nuovi, "
-              f"{len(movimenti) - len(da_inserire)} già presenti, budget {year} aggiornati: {len(budget)}, "
+              f"{len(movimenti) - len(da_inserire)} già presenti, "
+              f"{sum(not m['contabilizzato'] for m in da_inserire)} in attesa di contabilizzazione, budget {year} aggiornati: {len(budget)}, "
               f"{len(nuovi_investimenti)} operazioni investimenti nuove")
 
     # Riepiloghi annuali (Pre 2023) e saldi a inizio anno che ne derivano:
