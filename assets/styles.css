@@ -383,6 +383,39 @@ details summary {
   font-size: 0.95rem;
 }
 
+/* Titolo del grafico e, per la Sintesi, Giorno / Settimana / Mese */
+.grafico-testa {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.grafico-testa h2 {
+  margin: 0;
+}
+
+.toggle-piccolo button {
+  border: 0;
+  background: var(--surface);
+  color: var(--accent-deep);
+  padding: 0.2rem 0.7rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.toggle-piccolo button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* A schermo intero lascia spazio alla ✕ in alto a destra */
+.primo-piano .grafico-testa {
+  padding-right: 2.2rem;
+}
+
 .chart-canvas {
   position: relative;
   height: 360px;

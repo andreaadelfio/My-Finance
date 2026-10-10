@@ -6,6 +6,7 @@ const state = {
   supabase: null,
   year: undefined, // anno della Dashboard; null = tutti gli anni
   tipoDashboard: "sintesi", // la Dashboard mostra la sintesi, le uscite o le entrate
+  passoGrafico: "giorno", // grafico della Sintesi: un punto per giorno, settimana o mese
   gruppiAperti: new Set(), // gruppi della tabella andamento con le categorie visibili
   years: [],
   categorie: [],
@@ -46,6 +47,7 @@ const elements = {
   viewMovimenti: document.querySelector("#view-movimenti"),
   viewDashboard: document.querySelector("#view-dashboard"),
   toggleButtons: [...document.querySelectorAll(".toggle-button")],
+  passoGrafico: document.querySelector("#passo-grafico"),
   tortaCategorie: document.querySelector("#torta-categorie"),
   patrimonio: document.querySelector("#patrimonio"),
   questoMeseTitolo: document.querySelector("#questo-mese-titolo"),
@@ -153,16 +155,20 @@ function round2(value) {
   return Math.round(value * 100) / 100;
 }
 
+// Data (ora locale) come "aaaa-mm-gg"
+function dataISO(data) {
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}-${String(data.getDate()).padStart(2, "0")}`;
+}
+
 function todayISO() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return dataISO(new Date());
 }
 
 // Data delle operazioni "domani" (nell'Excel =OGGI()+1)
 function tomorrowISO() {
   const domani = new Date();
   domani.setDate(domani.getDate() + 1);
-  return `${domani.getFullYear()}-${String(domani.getMonth() + 1).padStart(2, "0")}-${String(domani.getDate()).padStart(2, "0")}`;
+  return dataISO(domani);
 }
 
 function normalize(text) {
@@ -1367,8 +1373,10 @@ function apriChiudiGruppo(button) {
 function renderDashboard() {
   const tipo = state.tipoDashboard;
   elements.toggleButtons.forEach((button) => button.classList.toggle("active", button.dataset.tipo === tipo));
+  elements.passoGrafico.classList.toggle("hidden", tipo !== "sintesi");
+  elements.passoGrafico.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.passo === state.passoGrafico));
   elements.titoloGraficoLinee.textContent = {
-    sintesi: "Uscite, entrate e risparmio del mese e saldo, giorno per giorno",
+    sintesi: { giorno: "Uscite, entrate e risparmio dall'inizio del mese e saldo, giorno per giorno", settimana: "Uscite, entrate, risparmio e saldo settimanali", mese: "Uscite, entrate, risparmio e saldo mensili" }[state.passoGrafico],
     uscita: "Uscite per categoria nel tempo",
     entrata: "Entrate per categoria nel tempo"
   }[tipo];
@@ -1579,7 +1587,7 @@ function cicloLinee(chart, i) {
 // barrate per poterle rimettere. chart.$titoloValori(i) dà la data del punto i.
 const valoreY = (punto) => (punto !== null && typeof punto === "object" ? punto.y : punto);
 // Valori di una linea per la riga dei valori: "$valori" quando i punti del grafico sono altri
-// (il saldo giornaliero, con il saldo a fine mese nella riga)
+// (giorno per giorno: nella riga i totali del mese)
 const valoriPunti = (dataset) => dataset.$valori ?? dataset.data;
 
 function mostraValori(chart, indice) {
@@ -1841,20 +1849,69 @@ function saldoGiornaliero() {
   return punti;
 }
 
-function renderCharts() {
-  const elenco = periodiAndamento(true);
-  const { entrate, uscite, risparmio, saldi } = andamento(elenco);
-  // Asse x numerico: il mese i-esimo è il punto i e il giorno g del mese sta a
-  // i + (g-1)/giorni del mese (come la linea di oggi), così le linee sono giornaliere
-  const indice = new Map(elenco.map((p, i) => [p.key, i]));
-  const posizione = (data) => {
-    const [a, m, g] = data.split("-").map(Number);
-    const i = indice.get(`${a}-${m}`);
-    return i === undefined ? null : i + (g - 1) / new Date(a, m, 0).getDate();
+// Titolo della riga dei valori per il mese i-esimo
+const titoloMensile = (elenco) => (i) => `${titoloMese(elenco[i])}${elenco[i].stima ? " (media mensile dal foglio Pre 2023)" : ""}`;
+
+// Sintesi a un punto per mese: totali del mese e saldo a fine mese
+function serieMensili(elenco, { uscite, entrate, risparmio, saldi }) {
+  const punti = (valori) => soloFinoAOggi(elenco, valori).map((y, i) => ({ x: i, y }));
+  return {
+    linee: [punti(uscite), punti(entrate), punti(risparmio), punti(saldi)],
+    titolo: titoloMensile(elenco),
+    fino: Math.floor(posizioneOggiMesi(elenco) ?? Infinity),
+    raggio: tuttiGliAnni() ? 0 : 3
   };
+}
+
+// Sintesi a un punto per settimana (da lunedì a domenica): totali della settimana e saldo a
+// fine settimana, anche per le settimane senza movimenti. I mesi del foglio "Pre 2023" (senza
+// movimenti) restano un punto al mese, con la media a settimana.
+function serieSettimanali(elenco, { uscite, entrate, risparmio, saldi }, posizione) {
+  const giorni = movimentiGiornalieri();
+  const saldo = saldoGiornaliero();
+  const righe = [];
+  elenco.forEach((p, i) => {
+    if (!p.stima) return;
+    const settimana = (v) => round2((v * 12) / 52);
+    righe.push({ x: i, valori: [settimana(uscite[i]), settimana(entrate[i]), settimana(risparmio[i]), saldi[i]], titolo: `${titoloMese(p)} (media settimanale dal foglio Pre 2023)` });
+  });
+  if (giorni.length) {
+    const lunedi = new Date(`${giorni[0].data}T12:00:00`);
+    lunedi.setDate(lunedi.getDate() - ((lunedi.getDay() + 6) % 7));
+    // fino a oggi, se oggi è nel grafico, altrimenti fino all'ultimo movimento
+    const fine = [giorni.at(-1).data, ...(posizione(todayISO()) === null ? [] : [todayISO()])].sort().at(-1);
+    let g = 0;
+    let s = 0;
+    let ultimoSaldo = null;
+    while (dataISO(lunedi) <= fine) {
+      const domenica = new Date(lunedi);
+      domenica.setDate(domenica.getDate() + 6);
+      const [da, a] = [dataISO(lunedi), dataISO(domenica)];
+      let [u, e] = [0, 0];
+      for (; g < giorni.length && giorni[g].data <= a; g += 1) [u, e] = [u + giorni[g].uscite, e + giorni[g].entrate];
+      for (; s < saldo.length && saldo[s].data <= a; s += 1) ultimoSaldo = saldo[s].saldo;
+      righe.push({
+        x: posizione(da) ?? posizione(giorni[0].data),
+        valori: [round2(u), round2(e), round2(e - u), ultimoSaldo],
+        titolo: `Settimana dal ${formatDate(da)} al ${formatDate(a)}`
+      });
+      lunedi.setDate(lunedi.getDate() + 7);
+    }
+  }
+  righe.sort((a, b) => a.x - b.x);
+  return {
+    linee: [0, 1, 2, 3].map((k) => righe.map((r) => ({ x: r.x, y: r.valori[k] }))),
+    titolo: (i) => righe[i].titolo,
+    fino: Infinity,
+    raggio: tuttiGliAnni() || schermoStretto() ? 0 : 2 // sul telefono 52 punti si accavallano
+  };
+}
+
+// Sintesi giorno per giorno: uscite, entrate e risparmio dall'inizio del mese (ogni mese
+// ripartono da 0 e l'ultimo giorno arrivano al totale del mese) e saldo a fine giorno. Linee a
+// gradini (cambiano solo nei giorni con movimenti); nella riga dei valori i totali del mese.
+function serieGiornaliere(elenco, { uscite, entrate, risparmio, saldi }, posizione) {
   const curva = saldoGiornaliero().map((p) => ({ x: posizione(p.data), y: p.saldo })).filter((p) => p.x !== null);
-  // Uscite, entrate e risparmio dall'inizio del mese: ogni mese ripartono da 0 e l'ultimo
-  // giorno arrivano al totale del mese
   const progressivi = { uscite: [], entrate: [], risparmio: [] };
   const finoAOggi = soloFinoAOggi(elenco, elenco.map(() => 0));
   elenco.forEach((p, i) => {
@@ -1882,29 +1939,61 @@ function renderCharts() {
     }
     if (saldi[i] !== null) curva.push({ x: i + 0.97, y: saldi[i] });
   });
-  for (const linea of [curva, ...Object.values(progressivi)]) linea.sort((a, b) => a.x - b.x);
-  // Linee a gradini (cambiano solo nei giorni con movimenti) con l'ultimo punto in evidenza;
-  // nella riga dei valori i totali del mese ("$valori")
-  const linea = (label, colore, punti, mensili) => ({
-    label, data: punti, $valori: soloFinoAOggi(elenco, mensili), stepped: true,
-    pointRadius: (ctx) => (ctx.dataIndex === punti.length - 1 ? 4 : 0),
-    borderColor: colore, backgroundColor: colore
-  });
+  const linee = [progressivi.uscite, progressivi.entrate, progressivi.risparmio, curva];
+  for (const linea of linee) linea.sort((a, b) => a.x - b.x);
+  return {
+    linee,
+    valori: [uscite, entrate, risparmio, saldi].map((v) => soloFinoAOggi(elenco, v)),
+    mesePunto: (punto) => Math.min(elenco.length - 1, Math.floor(punto.parsed.x + 1e-6)),
+    titolo: titoloMensile(elenco),
+    fino: Math.floor(posizioneOggiMesi(elenco) ?? Infinity),
+    gradini: true
+  };
+}
+
+function renderCharts() {
+  const elenco = periodiAndamento(true);
+  const mensili = andamento(elenco);
+  // Asse x numerico: il mese i-esimo è il punto i e il giorno g del mese sta a
+  // i + (g-1)/giorni del mese (come la linea di oggi), così ci stanno anche giorni e settimane
+  const indice = new Map(elenco.map((p, i) => [p.key, i]));
+  const posizione = (data) => {
+    const [a, m, g] = data.split("-").map(Number);
+    const i = indice.get(`${a}-${m}`);
+    return i === undefined ? null : i + (g - 1) / new Date(a, m, 0).getDate();
+  };
+  const serie = {
+    giorno: () => serieGiornaliere(elenco, mensili, posizione),
+    settimana: () => serieSettimanali(elenco, mensili, posizione),
+    mese: () => serieMensili(elenco, mensili)
+  }[state.passoGrafico]();
+  const linea = (label, colore, k) => {
+    const punti = serie.linee[k];
+    return {
+      label, data: punti, borderColor: colore, backgroundColor: colore,
+      ...(serie.gradini ? {
+        stepped: true,
+        $valori: serie.valori[k],
+        // l'ultimo giorno con movimenti in evidenza
+        pointRadius: (ctx) => (ctx.dataIndex === punti.length - 1 ? 4 : 0)
+      } : { pointRadius: serie.raggio })
+    };
+  };
   const asse = asseMesi();
   drawChart("andamento", elements.chartAndamento, {
     type: "line",
     data: {
       datasets: [
-        linea("Totale Uscite", "#c0392b", progressivi.uscite, uscite),
-        linea("Totale Entrate", "#2e8b57", progressivi.entrate, entrate),
-        linea("Risparmio", "#2f6fbf", progressivi.risparmio, risparmio),
-        linea("Saldo", "#8a8a8a", curva, saldi)
+        linea("Totale Uscite", "#c0392b", 0),
+        linea("Totale Entrate", "#2e8b57", 1),
+        linea("Risparmio", "#2f6fbf", 2),
+        linea("Saldo", "#8a8a8a", 3)
       ]
     },
     options: {
       maintainAspectRatio: false,
       interaction: { mode: "nearest", axis: "x", intersect: false },
-      // Mesi del foglio "Pre 2023" (medie mensili): linea tratteggiata
+      // Mesi del foglio "Pre 2023" (medie): linea tratteggiata
       datasets: { line: { segment: { borderDash: (ctx) => (elenco[Math.floor(ctx.p1.parsed.x)]?.stima ? [5, 4] : undefined) } } },
       plugins: {
         legend: senzaLegenda(),
@@ -1916,9 +2005,13 @@ function renderCharts() {
         ...euroAxis,
         x: {
           type: "linear",
+          // Con un anno fino al 31 dicembre compreso (il mese i va da i a i+1); con tutti gli
+          // anni fino a oggi (o all'ultimo punto, se ce n'è uno con data futura)
           min: 0,
-          max: Math.max(elenco.length - 1, curva.at(-1)?.x ?? 0),
-          // una tacca (e una riga della griglia) per mese, come l'asse a etichette
+          max: tuttiGliAnni()
+            ? Math.max(elenco.length - 1, posizioneOggiMesi(elenco) ?? 0, ...serie.linee.map((l) => l.at(-1)?.x ?? 0))
+            : elenco.length,
+          // una tacca (e una riga della griglia) per mese
           afterBuildTicks: (scala) => {
             scala.ticks = elenco.map((_, i) => ({ value: i })).filter((t) => t.value >= scala.min && t.value <= scala.max);
           },
@@ -1929,9 +2022,9 @@ function renderCharts() {
     },
     plugins: [lineaOggi, lineaCursore]
   });
-  // Punto toccato (un giorno) -> mese della riga dei valori
-  if (state.charts.andamento) state.charts.andamento.$mesePunto = (punto) => Math.min(elenco.length - 1, Math.floor(punto.parsed.x + 1e-6));
-  iniziaValori("andamento", (i) => `${titoloMese(elenco[i])}${elenco[i].stima ? " (media mensile dal foglio Pre 2023)" : ""}`, Math.floor(posizioneOggiMesi(elenco) ?? Infinity));
+  // Giorno per giorno: punto toccato (un giorno) -> mese della riga dei valori
+  if (state.charts.andamento) state.charts.andamento.$mesePunto = serie.mesePunto;
+  iniziaValori("andamento", serie.titolo, serie.fino);
 }
 
 // Mese e anno nella riga dei valori (con un solo anno l'etichetta sull'asse è solo il mese)
@@ -3631,6 +3724,17 @@ function bindEvents() {
     state.gruppiAperti = new Set(state.tipoDashboard === "sintesi" ? [] : [state.tipoDashboard]);
     renderDashboard();
   }));
+  elements.passoGrafico.addEventListener("click", (event) => {
+    const bottone = event.target.closest("button[data-passo]");
+    if (!bottone || bottone.dataset.passo === state.passoGrafico) return;
+    state.passoGrafico = bottone.dataset.passo;
+    try {
+      localStorage.setItem("myfinance:passo-grafico", state.passoGrafico);
+    } catch {
+      // Memoria del browser non disponibile: vale finché la pagina è aperta
+    }
+    renderDashboard();
+  });
   elements.viewDashboard.addEventListener("change", (event) => {
     if (event.target.matches(".budget-input")) saveBudget(event.target);
   });
@@ -3723,6 +3827,9 @@ async function init() {
   let ultimaVista = "dashboard";
   try {
     ultimaVista = localStorage.getItem("myfinance:view") || ultimaVista;
+    if (["giorno", "settimana", "mese"].includes(localStorage.getItem("myfinance:passo-grafico"))) {
+      state.passoGrafico = localStorage.getItem("myfinance:passo-grafico");
+    }
   } catch {
     // Memoria del browser non disponibile: si parte dalla Dashboard
   }

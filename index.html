@@ -15,7 +15,7 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="./assets/icon.svg">
     <link rel="apple-touch-icon" href="./assets/icon-192.png">
-    <link rel="stylesheet" href="./assets/styles.css?v=52">
+    <link rel="stylesheet" href="./assets/styles.css?v=53">
   </head>
   <body>
     <div class="page-shell">
@@ -123,7 +123,15 @@
           <div class="chart-box">
             <!-- Sul telefono, toccando il grafico, si apre a schermo intero: ✕ lo chiude -->
             <button class="icon-button chiudi-primo-piano" type="button" aria-label="Chiudi">✕</button>
-            <h2 id="titolo-grafico-linee"></h2>
+            <div class="grafico-testa">
+              <h2 id="titolo-grafico-linee"></h2>
+              <!-- Solo per la Sintesi: un punto per giorno, settimana o mese -->
+              <div id="passo-grafico" class="toggle toggle-piccolo" role="group" aria-label="Un punto per giorno, settimana o mese">
+                <button type="button" data-passo="giorno" title="Uscite, entrate e risparmio dall'inizio del mese; saldo a fine giorno">Giorno</button>
+                <button type="button" data-passo="settimana" title="Totali da lunedì a domenica; saldo a fine settimana">Settimana</button>
+                <button type="button" data-passo="mese" title="Totali del mese; saldo a fine mese">Mese</button>
+              </div>
+            </div>
             <div class="chart-canvas">
               <div class="zoom-comandi">
                 <button class="zoom-meno solo-primo-piano" type="button" aria-label="Rimpicciolisci" title="Rimpicciolisci">−</button>
@@ -301,6 +309,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/dist/umd/supabase.min.js"></script>
     <script src="./assets/config.js?v=10"></script>
-    <script type="module" src="./assets/app.js?v=74"></script>
+    <script type="module" src="./assets/app.js?v=79"></script>
   </body>
 </html>
